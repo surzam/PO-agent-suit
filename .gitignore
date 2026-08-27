@@ -1,5 +1,7 @@
 node_modules/
 workspace/exports/
 workspace/*.html
+workspace/variation-history.json
+graphify-out/
 template-library/codebase-to-course/.git/
 .DS_Store
