@@ -14,6 +14,11 @@ mkdir -p "$APP_LAUNCHERS_DIR"
 cp "$APP_DIR/po-agent-suite.desktop" "$APP_LAUNCHERS_DIR/po-agent-suite.desktop"
 chmod 644 "$APP_LAUNCHERS_DIR/po-agent-suite.desktop"
 
+# Never leave an older copy of this exact project serving stale UI/code.
+pkill -f "$APP_DIR/electron/main.mjs" 2>/dev/null || true
+pkill -f "$APP_DIR/server.mjs" 2>/dev/null || true
+sleep 1
+
 if [ ! -x "$APP_DIR/node_modules/.bin/electron" ]; then
   echo 'Устанавливаю зависимости Electron…'
   npm install
