@@ -2,7 +2,7 @@
 Name=PO Agent Suite · Workstation Computer
 Comment=R&D narrative presentation workstation
 Exec=/media/surzam/DATA/prez/launch.sh
-Icon=/media/surzam/DATA/prez/assets/icons/256x256.png
+Icon=/media/surzam/DATA/prez/assets/icons/rnd-icon.png
 Terminal=false
 Type=Application
 Categories=Office;Development;
