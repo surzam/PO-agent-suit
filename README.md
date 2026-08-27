@@ -1,21 +1,18 @@
-# PO Agent Suite
+# PO Agent Suite · Workstation Computer
 
-Локальный workstation harness для OpenCode и локальной модели через `llama.cpp server`. Главный взгляд агента — Product Owner: обобщить материалы, выделить главное и показать следующий шаг.
+Открытое Electron-приложение для Product Owner: чат формирует исследовательский заказ, локальный и интернет-поиск собирают Evidence, после чего один pipeline создаёт связанные **Data**, **Narrative**, **Slides** и legacy **PPTX**.
 
 ## Запуск — одна команда
 
-Требуется Node.js 18+. Для desktop-приложения:
+Требуются Node.js 18+, npm и работающий OpenAI-compatible `llama.cpp server`.
 
 ```bash
-cd /media/surzam/DATA/prez
-./launch.sh
+cd /media/surzam/DATA/prez && ./launch.sh
 ```
 
-`launch.sh` сам установит npm-зависимости, остановит старый процесс этого проекта, зарегистрирует ярлык и запустит frameless Electron-окно. Первая генерация запускается кнопкой `Генерировать`. Для остановки закройте окно крестиком.
+Если зависимости ещё не установлены, launcher установит их сам. Он также останавливает только старый процесс этого проекта, регистрирует desktop-ярлык и открывает frameless Electron-окно.
 
-## Обязательное подключение llama.cpp
-
-Приложение работает только с настоящей моделью через OpenAI-compatible endpoint `http://127.0.0.1:8080/v1`; fallback-сценария для генерации нет. Во втором терминале запустите сервер модели (путь к бинарнику и GGUF замените на свои):
+Модель запускается в соседнем терминале, например:
 
 ```bash
 /path/to/llama-server \
@@ -24,13 +21,7 @@ cd /media/surzam/DATA/prez
   -c 8192
 ```
 
-Затем в первом терминале:
-
-```bash
-cd /media/surzam/DATA/prez && ./launch.sh
-```
-
-Если endpoint или модель находятся в другом месте, задайте переменные перед запуском:
+Для другого endpoint или имени модели:
 
 ```bash
 LLAMA_BASE_URL=http://127.0.0.1:8080/v1 \
@@ -38,40 +29,93 @@ LLAMA_MODEL=имя-модели.gguf \
 ./launch.sh
 ```
 
-Проверка подключения:
+Проверка:
 
 ```bash
 curl http://127.0.0.1:8080/v1/models
 curl http://localhost:3000/api/health
 ```
 
-В `/api/health` должны быть текущие `generationVersion`, `pid`, `port` и адрес модели. Если генерация не стартует, сначала убедитесь, что `curl http://127.0.0.1:8080/v1/models` отвечает, затем перезапустите `./launch.sh`.
+Production-fallback отсутствует: если модель недоступна или не возвращает валидный JSON, job честно завершается ошибкой.
 
-## Desktop-приложение
+## Как пользоваться
 
-Единственная команда для установки зависимостей и запуска изолированного Linux-приложения:
+- Пустой чат + `Удивить меня` — модель создаёт случайный ResearchBrief и исследует его.
+- Введите собственный вопрос — агент сохранит исходный ракурс, при необходимости задаст не больше двух уточнений, затем кнопка станет `Исследовать`.
+- Во время job одна кнопка становится `Остановить`, а интерфейс показывает стадии pipeline.
+- Активный job автоматически переключает центр приложения в sci-fi Research Observation Console: последовательность стадий, live trace, Evidence/source telemetry и сигнал активности. Это собственный безопасный SSE-интерфейс, визуально вдохновлённый eDEX-UI; терминал, мониторинг процессов и код eDEX-UI не встраиваются.
+- После завершения откройте Data, Narrative, Slides или скачайте legacy PPTX. HTML Slides сохраняют анимации и навигацию стрелками/пробелом.
+- `Новое исследование` очищает текущий Brief, не удаляя уже сохранённые файлы.
 
-```bash
-./launch.sh
+Автоматической генерации при старте больше нет.
+
+## Phase 1 research pipeline
+
+```text
+Chat / random order
+        ↓
+ResearchBrief
+        ↓
+Scout → Needs + Definition of Done
+        ↓
+Local files + DuckDuckGo HTTP research
+        ↓
+Evidence + conflicts + unknowns
+        ↓
+Data → StoryPlan → Narrative + Slides + PPTX
 ```
 
-Первая генерация стартует автоматически. Для сборки AppImage и deb-пакета:
+Исследование выполняется асинхронно. Ограничения по умолчанию: 10 минут, 24 обращения к источникам, до 4 итераций на критерий готовности, остановка после двух итераций без новых фактов и максимум три загруженные интернет-страницы. LLM-вызовы последовательны.
 
-```bash
-npm run package
+### Источники и безопасность
+
+- Локальный поиск работает только в путях `research.local.allowed_paths` из `po-agent.config.yaml`; пути за пределами корня приложения отклоняются.
+- Не индексируются `AGENTS.md`, `README.md`, `skills/`, `tests/`, `public/`, `workspace/`, `node_modules/`, `.git`, `.opencode`, секреты, бинарные файлы и изображения.
+- Поддерживаются Markdown/text, JSON, CSV/TSV, YAML, распространённый исходный код, HTML/CSS и текстовый слой PDF. Лимиты: 200 файлов и 1 MB на файл.
+- HTTP-путь использует DuckDuckGo HTML, `Readability`, timeout, лимит 2 MB, максимум три redirect и повторную DNS-проверку. Приватные, loopback и link-local адреса блокируются.
+- MCP, Graphify и BrowserWindow fallback не входят в Phase 1; это следующий модульный этап.
+
+## Сохранённые артефакты
+
+Каждая генерация получает неизменяемую папку:
+
+```text
+workspace/exports/<generationId>/
+├── data.json
+├── data.csv
+├── narrative.md
+├── slides.html
+├── legacy.pptx
+├── research.json
+└── manifest.json
 ```
 
-## Workflow v1
+Запись атомарная. `workspace/exports/index.json` позволяет восстановить artifact routes после перезапуска. Старые плоские exports не удаляются и не перезаписываются.
 
-- Интерфейс: chat-first, контекстные файлы и результат «Открыть презентацию» в новом окне.
-- Источники v1: CSV, JSON, Markdown, DOCX, XLSX и Git как контекст; полноценный backlog indexing остаётся отдельному продукту Indexator.
-- Слайды: HTML 16:9, который строится из сцен текущего `StoryPlan`; Data, Narrative, HTML Slides и legacy PPTX доступны по URL с одним `generationId`.
-- Визуальный пул: 35 шаблонов, 45 композиций и устойчивый журнал стилей/ракурсов в `workspace/variation-history.json`; график появляется не чаще одного раза на пять слайдов.
-- Числовые сигналы из Data используются в карточках Data, HTML-графиках и PPTX-графиках.
-- Экспорт выполняется только в выбранный локальный workspace.
+## API
 
-PO skills находятся в `skills/`: `po-worldview.md`, `po-synthesis.md`, `po-communication.md`, `quality.md`.
+- `POST /api/brief/turn` — добавить сообщение и обновить Brief.
+- `POST /api/generations` — запустить пользовательское или случайное исследование; ответ `202`.
+- `GET /api/generations/:id/events` — SSE-прогресс.
+- `GET /api/generations/:id` — состояние и результат.
+- `DELETE /api/generations/:id` — отменить активный job.
+- `GET /api/artifact/:id/:kind` — `data`, `narrative`, `slides`, `pptx` или `research`.
+- `POST /api/run` — совместимый синхронный alias случайного исследования.
+- `GET /api/health` — версия, PID, порт, модель и активные типы источников.
 
-## OpenCode
+Состояния: `brief → scout → planning → researching → validating → synthesizing → rendering → complete | failed | cancelled`.
 
-Передайте агенту OpenCode этот репозиторий и попросите использовать skills из `skills/`. Конфигурация модели и workspace находится в `po-agent.config.yaml`.
+## Проверки и сборка
+
+```bash
+npm run check
+npm run test:research
+npm run test:slides
+npm run test:api
+npm run package      # AppImage
+npm run package:deb  # Debian package, опционально
+```
+
+`test:research` работает на mock-модели и mock-источнике: production-код не содержит fixture-fallback. `test:slides` проверяет все 35 тем, 16:9, scene renderers и лимит графиков не чаще одного на пять слайдов.
+
+Настройки находятся в `po-agent.config.yaml`. PO-инструкции — в `skills/po-worldview.md`, `skills/po-synthesis.md`, `skills/po-communication.md`; quality gate — в `skills/quality.md`. Backlog indexing остаётся отдельному продукту Indexator.

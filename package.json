@@ -1,17 +1,26 @@
 {
   "name": "po-agent-suite",
   "version": "0.1.0",
+  "description": "PO Agent Suite · Workstation Computer with local deep research, evidence-backed narratives, and animated slides",
+  "homepage": "https://github.com/surzam/PO-agent-suit",
+  "author": {
+    "name": "surzam",
+    "email": "surzam@users.noreply.github.com"
+  },
   "private": true,
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
     "dev": "node server.mjs",
     "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check electron/main.mjs && node --check electron/preload.mjs",
+    "check": "node --check server.mjs && node --check electron/main.mjs && node --check electron/preload.mjs && node --check research/storage.mjs && node --check research/sources.mjs && node --check research/service.mjs",
     "test:slides": "node scripts/slides-audit.mjs",
+    "test:research": "node scripts/research-audit.mjs",
+    "test:api": "node scripts/api-audit.mjs",
     "app": "electron --no-sandbox electron/main.mjs",
     "launch": "bash launch.sh",
-    "package": "electron-builder --linux AppImage deb"
+    "package": "electron-builder --linux AppImage",
+    "package:deb": "electron-builder --linux deb"
   },
   "devDependencies": {
     "electron": "^31.0.0",
@@ -24,6 +33,9 @@
       "electron/**/*",
       "public/**/*",
       "server.mjs",
+      "research/**/*",
+      "po-agent.config.yaml",
+      "product-lore.md",
       "package.json",
       "assets/icons/**/*",
       "template-library/index.json",
@@ -43,6 +55,10 @@
     "node": ">=18"
   },
   "dependencies": {
-    "pptxgenjs": "^3.12.0"
+    "@mozilla/readability": "^0.6.0",
+    "jsdom": "^24.1.3",
+    "pdf-parse": "^1.1.1",
+    "pptxgenjs": "^3.12.0",
+    "yaml": "^2.9.0"
   }
 }

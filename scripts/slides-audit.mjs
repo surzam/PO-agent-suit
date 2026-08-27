@@ -44,6 +44,8 @@ assert.equal(themes.size, slugs.length, 'every template has a unique theme token
 assert.equal(families.size, 6, 'six structurally distinct design families');
 for (const family of families) assert.ok(workstation.includes(`data-family="${family}"`), `workstation mirrors ${family} family`);
 assert.ok(workstation.includes('applyStyle(x.visualTheme)'), 'workstation consumes exact generated theme');
+assert.ok(workstation.includes('RESEARCH SEQUENCE') && workstation.includes('LIVE RESEARCH TRACE'), 'workstation includes research observation console');
+assert.ok(!workstation.includes('xterm'), 'observation console does not expose an embedded terminal');
 assert.ok(!workstation.includes('const palettes='), 'legacy menu-only palette generator removed');
 assert.equal(mottoSimilarity('Код становится понятным', 'Код становится понятным'), 1, 'exact motto repetition is detected');
 assert.equal(mottoSimilarity('Код становится понятным', 'Решение начинается с проверяемого ограничения'), 0, 'distinct mottos remain distinct');

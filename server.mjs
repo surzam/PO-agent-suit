@@ -3,17 +3,22 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pptxgen from 'pptxgenjs';
+import YAML from 'yaml';
+import { createArtifactStore } from './research/storage.mjs';
+import { createLocalSource, createWebSource } from './research/sources.mjs';
+import { createResearchService } from './research/service.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, 'public');
-const exportDir = path.join(root, 'workspace', 'exports');
-const workspaceDir = path.join(root, 'workspace');
+const workspaceDir = path.resolve(process.env.PO_WORKSPACE_DIR || path.join(root, 'workspace'));
+const exportDir = path.resolve(process.env.PO_EXPORT_DIR || path.join(workspaceDir, 'exports'));
 const variationHistoryFile = path.join(workspaceDir, 'variation-history.json');
 const templateDir = path.join(root, 'template-library');
 const port = Number(process.env.PORT || 3000);
-const generationVersion = '2.0.0-pipeline';
+const generationVersion = '3.0.0-deep-research-phase1';
 const buildTimestamp = new Date().toISOString();
 await fs.mkdir(exportDir, { recursive: true });
+const appConfig = await fs.readFile(path.join(root, 'po-agent.config.yaml'), 'utf8').then(YAML.parse).catch(() => ({}));
 const variationHistory = await fs.readFile(variationHistoryFile, 'utf8').then(JSON.parse).catch(() => ({ styles: [], angles: [], stories: [] }));
 const usedStyles = new Set(Array.isArray(variationHistory.styles) ? variationHistory.styles : []);
 const usedAngles = new Set(Array.isArray(variationHistory.angles) ? variationHistory.angles : []);
@@ -267,6 +272,35 @@ async function persistVariationHistory(storyFingerprint, motto) {
   };
   await fs.writeFile(variationHistoryFile, JSON.stringify(payload, null, 2));
 }
+async function modelJson(system, user, { signal, temperature = 0.7, maxTokens = 1200 } = {}) {
+  const base = process.env.LLAMA_BASE_URL || appConfig.llm?.base_url || 'http://127.0.0.1:8080/v1';
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Number(appConfig.llm?.timeout_ms || 300000));
+  const abort = () => controller.abort();
+  signal?.addEventListener('abort', abort, { once: true });
+  try {
+    const response = await fetch(`${base.replace(/\/$/, '')}/chat/completions`, {
+      method: 'POST', signal: controller.signal, headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: process.env.LLAMA_MODEL || appConfig.llm?.model || 'local',
+        temperature: clamp(temperature, 0, 2), max_tokens: maxTokens,
+        response_format: { type: 'json_object' },
+        messages: [{ role: 'system', content: system }, { role: 'user', content: user }]
+      })
+    });
+    if (!response.ok) throw new Error(`LLM endpoint returned HTTP ${response.status}`);
+    const raw = (await response.json()).choices?.[0]?.message?.content || '';
+    const match = raw.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('LLM returned no JSON object');
+    return JSON.parse(match[0]);
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error(signal?.aborted ? 'Исследование остановлено' : 'LLM request timed out');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
+  }
+}
 async function llama(input, data, temperature) {
   input = { ...input, prompt: input.prompt || selfPrompts[Date.now() % selfPrompts.length] };
   const base = process.env.LLAMA_BASE_URL || 'http://127.0.0.1:8080/v1'; const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 300000);
@@ -284,7 +318,7 @@ async function refineScenes(plan, data, temperature) {
 }
 function normalizePlan(plan, minimumScenes = 3) {
   if (!plan || !Array.isArray(plan.scenes) || plan.scenes.length < Math.max(3, minimumScenes)) return null;
-  return { ...plan, evidence:Array.isArray(plan.evidence) ? plan.evidence : [], unknowns:Array.isArray(plan.unknowns) ? plan.unknowns : [], scenes: plan.scenes.slice(0, 15).map((s, i) => ({ ...s, index:i + 1, title:String(s.title || `Сцена ${i + 1}`), thesis:String(s.thesis || ''), evidence:Array.isArray(s.evidence) ? s.evidence : [], speakerScript:String(s.speakerScript || ''), visualType:visualTypes.includes(s.visualType) ? s.visualType : 'statement' })) };
+  return { ...plan, evidence:Array.isArray(plan.evidence) ? plan.evidence : [], unknowns:Array.isArray(plan.unknowns) ? plan.unknowns : [], scenes: plan.scenes.slice(0, 15).map((s, i) => ({ ...s, index:i + 1, title:String(s.title || `Сцена ${i + 1}`), thesis:String(s.thesis || ''), evidence:Array.isArray(s.evidence) ? s.evidence : [], evidenceIds:Array.isArray(s.evidenceIds) ? s.evidenceIds.map(String) : [], speakerScript:String(s.speakerScript || ''), visualType:visualTypes.includes(s.visualType) ? s.visualType : 'statement' })) };
 }
 function selectStyle(temperature, generationId, requested) {
   const styles = templates.length ? templates.map(t => t.slug) : ['editorial','professional','kinetic','diagrammatic']; if (styles.includes(requested)) return requested;
@@ -430,11 +464,101 @@ function animateSlides(html) {
   return html;
 }
 
-const generations = new Map();
-async function run(input) { const generationId=idOf(), temperature=clamp(input.temperature ?? .7,0,2), request={...input,generationId}, data=await buildData(request), modelPlan=await llama(request,data,temperature), model=process.env.LLAMA_MODEL || 'Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf', plan=normalizePlan(modelPlan,sceneBudget(model)); if(!plan) throw new Error(`LLM generation unavailable or returned fewer than ${sceneBudget(model)} scenes; demo fallback is disabled.`); const motto=await generateMotto(plan,data,temperature,generationId), styleId=input.style || (/код|codebase|course/i.test(input.prompt || '') ? 'codebase-to-course' : selectStyle(temperature,generationId,input.style)); const mode='llama.cpp'; const meta={generationId,mode,styleId,temperature,generationVersion}; const visualTheme=templateVisualTheme(styleId,generationId); plan.motto=motto; const storyFingerprint=plan.scenes.map(scene=>String(scene.title).trim().toLowerCase()).join('|'); await persistVariationHistory(storyFingerprint,motto); const files={data:dataHtml(data,meta),narrative:narrativeHtml(plan,meta),slides:animateSlides(slidesHtml(plan,meta,data)),pptx:await legacyPptx(plan,meta,data)}; for(const [kind,html] of Object.entries(files)) await fs.writeFile(path.join(exportDir,`${generationId}-${kind}.${kind==='pptx'?'pptx':'html'}`),html); const result={generationId,mode,styleId,visualTheme,temperature,data,narrative:{...plan,generationId},slides:{...plan,generationId},urls:{data:`/api/artifact/${generationId}/data`,narrative:`/api/artifact/${generationId}/narrative`,slides:`/api/artifact/${generationId}/slides`,pptx:`/api/artifact/${generationId}/pptx`}}; generations.set(generationId,{...result,files}); return result; }
+function narrativeMarkdown(plan, research, meta) {
+  const citations = ids => ids.map(id => `[${id}]`).join(' ');
+  const evidence = research.evidence.map(item => `- [${item.id}] ${item.claim} — ${item.sourceTitle} (${item.sourceUri})`).join('\n');
+  const pages = plan.scenes.map(scene => `## Слайд ${String(scene.index).padStart(2, '0')}. ${scene.title}\n\n**Тезис:** ${scene.thesis}\n\n**Опорные данные:** ${scene.evidence.map((value, index) => `${value} ${scene.evidenceIds[index] ? `[${scene.evidenceIds[index]}]` : ''}`).join(' · ')}\n\n**Переход:** ${scene.transition || (scene.index === plan.scenes.length ? plan.nextStep : 'Следующая сцена развивает последствие этого наблюдения.')}\n\n### Что сказать\n\n${scene.speakerScript}`).join('\n\n---\n\n');
+  return `# ${plan.topic}\n\nGeneration: ${meta.generationId}  \nАудитория: ${plan.audience}\n\n## Главный тезис\n\n${plan.centralThesis}\n\n## Ситуация\n\n${plan.situation}\n\n## Доказательства\n\n${evidence}\n\n## Интерпретация\n\n${plan.interpretation || plan.centralThesis}\n\n## Риски и неизвестности\n\n${(research.unknowns.length ? research.unknowns : plan.unknowns).map(item => `- ${item}`).join('\n') || '- Не зафиксированы.'}\n\n## Следующий шаг\n\n${plan.nextStep}\n\n${pages}\n`;
+}
+
+async function renderResearchGeneration({ generationId, brief, research, data, signal, temperature = 0.7, style }) {
+  const model = process.env.LLAMA_MODEL || appConfig.llm?.model || 'local';
+  const count = sceneBudget(model);
+  const evidenceCatalog = research.evidence.map(item => ({ id:item.id, claim:item.claim, confidence:item.confidence, kind:item.kind, sourceTitle:item.sourceTitle }));
+  const modelPlan = await modelJson(
+    `${PO_SYSTEM_PROMPT} Для каждой сцены обязательно верни evidenceIds — массив существующих ID из Evidence. Не превращай interpretation или unknown в факт. Добавь transition — естественный переход к следующей сцене. История должна отвечать именно на ResearchBrief, а не быть обзором приложения.`,
+    `Сделай ${count}–${Math.min(15, count + 3)} сцен. ResearchBrief: ${JSON.stringify(brief)}\nEvidence: ${JSON.stringify(evidenceCatalog)}\nData: ${JSON.stringify(data)}\nНе повторяй эти прошлые структуры: ${recentStories.slice(-8).join(' || ')}`,
+    { signal, temperature, maxTokens: Math.max(1600, count * 320) }
+  );
+  const plan = normalizePlan(modelPlan, count);
+  if (!plan) throw new Error(`LLM returned fewer than ${count} valid scenes`);
+  const byId = new Map(research.evidence.map(item => [item.id, item]));
+  for (const scene of plan.scenes) {
+    scene.evidenceIds = scene.evidenceIds.filter(id => byId.has(id)).slice(0, 3);
+    if (!scene.evidenceIds.length) scene.evidenceIds = research.evidence.filter(item => item.kind === 'fact').slice(scene.index - 1, scene.index + 1).map(item => item.id);
+    if (!scene.evidenceIds.length) throw new Error(`Scene ${scene.index} has no valid Evidence ID`);
+    scene.evidence = scene.evidenceIds.map(id => byId.get(id).claim);
+  }
+  plan.evidence = research.evidence.filter(item => item.kind === 'fact').slice(0, 8).map(item => `${item.claim} [${item.id}]`);
+  plan.unknowns = [...new Set([...(plan.unknowns || []), ...research.unknowns])];
+  plan.motto = String(plan.motto || plan.centralThesis).trim();
+  const temperatureValue = clamp(temperature, 0, 2);
+  const styleId = style || (/код|codebase|репозитор|модул/i.test(brief.question) ? 'codebase-to-course' : selectStyle(temperatureValue, generationId));
+  const meta = { generationId, mode:'llama.cpp', styleId, temperature:temperatureValue, generationVersion };
+  const visualTheme = templateVisualTheme(styleId, generationId);
+  const storyFingerprint = plan.scenes.map(scene => String(scene.title).trim().toLowerCase()).join('|');
+  await persistVariationHistory(storyFingerprint, plan.motto);
+  const result = {
+    generationId, mode:'llama.cpp', styleId, visualTheme, temperature:temperatureValue, data,
+    narrative:{ ...plan, generationId }, slides:{ ...plan, generationId }, research:{ evidenceCount:research.evidence.length, sourceStats:research.sourceStats },
+    urls:{ data:`/api/artifact/${generationId}/data`, narrative:`/api/artifact/${generationId}/narrative`, slides:`/api/artifact/${generationId}/slides`, pptx:`/api/artifact/${generationId}/pptx`, research:`/api/artifact/${generationId}/research` }
+  };
+  return {
+    result,
+    narrativeMarkdown:narrativeMarkdown(plan, research, meta),
+    slidesHtml:animateSlides(slidesHtml(plan, meta, data)),
+    pptx:await legacyPptx(plan, meta, data),
+    manifestMeta:{ mode:'llama.cpp', styleId, temperature:temperatureValue, generationVersion, brief, urls:result.urls, visualTheme }
+  };
+}
+
+const artifactStore = createArtifactStore(exportDir);
+await artifactStore.initialize();
+const realRoot = await fs.realpath(root);
+const configuredRoots = (await Promise.all((appConfig.research?.local?.allowed_paths || ['.']).map(async value => fs.realpath(path.resolve(root, value)).catch(() => null)))).filter(value => value && (value === realRoot || value.startsWith(`${realRoot}${path.sep}`)));
+const researchSources = [createLocalSource({ roots:configuredRoots, maxFiles:Number(appConfig.research?.local?.max_files || 200) })];
+if (process.env.PO_RESEARCH_WEB !== '0' && appConfig.research?.web?.enabled !== false) researchSources.push(createWebSource({ rateLimitMs:Number(appConfig.research?.web?.rate_limit_ms || 1000) }));
+const researchService = createResearchService({
+  modelJson, sources:researchSources, render:renderResearchGeneration, store:artifactStore,
+  limits:{ timeoutMs:Number(appConfig.research?.limits?.timeout_ms || 600000), maxSourceCalls:Number(appConfig.research?.limits?.max_source_calls || 24), maxIterationsPerDod:Number(appConfig.research?.limits?.max_iterations_per_dod || 4), stagnationLimit:Number(appConfig.research?.limits?.stagnation_limit || 2), maxWebPages:Number(appConfig.research?.web?.max_pages || 3) }
+});
+
+async function run(input = {}) {
+  const started = researchService.start({ origin:'random', temperature:input.temperature, style:input.style });
+  const finished = await researchService.wait(started.generationId);
+  return finished.result;
+}
 async function body(req){let raw='';for await(const chunk of req)raw+=chunk;return raw?JSON.parse(raw):{}}
 function sendJson(res,value,code=200){res.writeHead(code,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));}
-async function handle(req,res){const url=new URL(req.url,'http://localhost'); if(url.pathname==='/api/health')return sendJson(res,{ok:true,generationVersion,pid:process.pid,port:server.address()?.port || port,buildTimestamp,model:process.env.LLAMA_BASE_URL||'http://127.0.0.1:8080/v1'}); if(url.pathname==='/api/run'&&req.method==='POST')return sendJson(res,{ok:true,...await run(await body(req))}); const artifact=url.pathname.match(/^\/api\/artifact\/([^/]+)\/(data|narrative|slides|pptx)$/); if(artifact){const item=generations.get(artifact[1]);if(!item)return sendJson(res,{error:'generation not found'},404);if(artifact[2]==='pptx'){res.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.presentationml.presentation','content-disposition':`attachment; filename="${artifact[1]}-legacy.pptx"`,'cache-control':'no-store'});return res.end(item.files.pptx)}res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});return res.end(item.files[artifact[2]])} const requested=url.pathname==='/'?'/index.html':url.pathname;const file=path.normalize(path.join(publicDir,requested));if(!file.startsWith(publicDir))return sendJson(res,{error:'forbidden'},403);try{const data=await fs.readFile(file);res.writeHead(200,{'content-type':'text/html; charset=utf-8'});res.end(data)}catch{sendJson(res,{error:'not found'},404)}}
+async function handle(req,res){
+  const url=new URL(req.url,'http://localhost');
+  if(url.pathname==='/api/health')return sendJson(res,{ok:true,generationVersion,pid:process.pid,port:server.address()?.port || port,buildTimestamp,model:process.env.LLAMA_BASE_URL||appConfig.llm?.base_url||'http://127.0.0.1:8080/v1',sources:researchSources.map(source=>source.id)});
+  if(url.pathname==='/api/brief/turn'&&req.method==='POST')return sendJson(res,{ok:true,...await researchService.briefTurn(await body(req))});
+  if(url.pathname==='/api/generations'&&req.method==='POST')return sendJson(res,{ok:true,...researchService.start(await body(req))},202);
+  const generation=url.pathname.match(/^\/api\/generations\/([^/]+)$/);
+  if(generation&&req.method==='GET'){const job=researchService.get(generation[1]);return job?sendJson(res,{ok:true,...job}):sendJson(res,{error:'generation not found'},404)}
+  if(generation&&req.method==='DELETE')return researchService.cancel(generation[1])?sendJson(res,{ok:true,state:'cancelling'},202):sendJson(res,{error:'active generation not found'},404);
+  const events=url.pathname.match(/^\/api\/generations\/([^/]+)\/events$/);
+  if(events&&req.method==='GET'){
+    res.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','cache-control':'no-cache','connection':'keep-alive'});
+    const write=event=>{res.write(`event: progress\ndata: ${JSON.stringify(event)}\n\n`);if(['complete','failed','cancelled'].includes(event.stage))res.end()};
+    const unsubscribe=researchService.subscribe(events[1],write);
+    if(!unsubscribe)return res.end(`event: error\ndata: ${JSON.stringify({error:'generation not found'})}\n\n`);
+    const heartbeat=setInterval(()=>res.write(': heartbeat\n\n'),15000);
+    req.on('close',()=>{clearInterval(heartbeat);unsubscribe()});
+    return;
+  }
+  if(url.pathname==='/api/run'&&req.method==='POST')return sendJson(res,{ok:true,...await run(await body(req))});
+  const artifact=url.pathname.match(/^\/api\/artifact\/([^/]+)\/(data|narrative|slides|pptx|research)$/);
+  if(artifact){
+    const item=artifactStore.artifact(artifact[1],artifact[2]);if(!item)return sendJson(res,{error:'generation not found'},404);
+    const types={data:'application/json; charset=utf-8',narrative:'text/markdown; charset=utf-8',slides:'text/html; charset=utf-8',pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation',research:'application/json; charset=utf-8'};
+    const headers={'content-type':types[artifact[2]],'cache-control':'no-store'};
+    if(artifact[2]==='pptx')headers['content-disposition']=`attachment; filename="${artifact[1]}-legacy.pptx"`;
+    res.writeHead(200,headers);return res.end(await fs.readFile(item.file));
+  }
+  const requested=url.pathname==='/'?'/index.html':url.pathname;const file=path.normalize(path.join(publicDir,requested));if(!file.startsWith(publicDir))return sendJson(res,{error:'forbidden'},403);try{const data=await fs.readFile(file);res.writeHead(200,{'content-type':'text/html; charset=utf-8'});res.end(data)}catch{sendJson(res,{error:'not found'},404)}
+}
 const server=http.createServer((req,res)=>handle(req,res).catch(e=>{console.error('[api error]',e);sendJson(res,{error:e.message},500)}));
 if (process.env.PO_AGENT_NO_LISTEN !== '1') server.listen(port,()=>console.log(`PO Agent Suite ${generationVersion}: http://localhost:${server.address().port}`));
-export { slidesHtml, designFamily, templateTheme, templateVisualTheme, metricRows, mottoSimilarity };
+export { slidesHtml, designFamily, templateTheme, templateVisualTheme, metricRows, mottoSimilarity, modelJson, renderResearchGeneration, researchService, artifactStore };

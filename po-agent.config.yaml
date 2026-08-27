@@ -4,6 +4,7 @@ llm:
   base_url: http://127.0.0.1:8080/v1
   model: local
   api_key: optional
+  timeout_ms: 300000
 
 workspace:
   root: ./workspace
@@ -13,6 +14,28 @@ workspace:
 sources:
   allow: [files, git]
   external_connectors: disabled
+
+# Phase 1: HTTP and explicitly allowed local paths. MCP and the sandboxed
+# browser fallback are intentionally deferred to Phase 2.
+research:
+  limits:
+    timeout_ms: 600000
+    max_source_calls: 24
+    max_iterations_per_dod: 4
+    stagnation_limit: 2
+  web:
+    enabled: true
+    provider: duckduckgo-html
+    max_pages: 3
+    rate_limit_ms: 1000
+    timeout_ms: 15000
+    max_response_bytes: 2097152
+    max_redirects: 3
+  local:
+    allowed_paths: [.] # paths are resolved inside the application root only
+    max_files: 200
+    max_file_bytes: 1048576
+    exclude: [AGENTS.md, README.md, skills, tests, public, workspace/exports, node_modules, .git, .opencode]
 
 artifacts:
   tables: { formats: [csv, xlsx] }
