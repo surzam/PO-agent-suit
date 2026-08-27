@@ -10,7 +10,12 @@ let serverProcess;
 // Electron installed inside the project cannot use its root-owned SUID helper.
 // The app is already isolated from the user's regular browser/runtime and owns
 // a dedicated localhost server, so use the portable Linux fallback.
-if (process.platform === 'linux') app.commandLine.appendSwitch('no-sandbox');
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('no-sandbox');
+  app.commandLine.appendSwitch('class', 'po-agent-suite');
+  app.setName('po-agent-suite');
+}
+app.setAppUserModelId('local.poagent.suite');
 Menu.setApplicationMenu(null);
 ipcMain.on('close-window', event => BrowserWindow.fromWebContents(event.sender)?.close());
 
