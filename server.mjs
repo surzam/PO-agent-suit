@@ -229,12 +229,19 @@ function selectStyle(temperature, generationId, requested) {
 }
 function templateTheme(slug) {
   if (slug === 'codebase-to-course') return '--bg:#241b16;--ink:#fff6e8;--accent:#ffb86b;--soft:#684936;--hot:#f06f52;font-family:ui-monospace,monospace';
-  const light=/yellow|paper|editorial|monochrome|cobalt|coral|capsule|cartesian|daisy|sakura|stencil|playful|raw-grid|peoples|scatterbrain|block-frame|blue-professional/i.test(slug);
-  const neon=/8-bit|retro|studio|signal|cobalt|neo-grid|creative|raw-grid/i.test(slug);
-  const bg=light?'#f4efe4':'#101827', ink=light?'#18212b':'#f7fbff', accent=neon?'#f0dc4d':(light?'#1e65d6':'#8ff1df'), hot=light?'#d65f45':'#ff805d';
-  const font=/editorial|vellum|monochrome|biennale|forest|emerald|soft-editorial|broadside/i.test(slug)?'Georgia,serif':/retro-windows|8-bit/i.test(slug)?'monospace':'system-ui,sans-serif';
-  return `--bg:${bg};--ink:${ink};--accent:${accent};--soft:${light?'#d8e1d0':'#31506b'};--hot:${hot};font-family:${font}`;
+  const template=templates.find(item=>item.slug===slug); const palette=template?.palette || {}; const bg=palette.bg_primary || palette.bg || palette.background || (/yellow|paper|editorial|monochrome|cobalt|coral|daisy|sakura|playful|cartesian/i.test(slug)?'#f4efe4':'#101827'); const ink=palette.text_primary || palette.dark || palette.ink || (/yellow|paper|editorial|monochrome|cobalt|coral|daisy|sakura|playful|cartesian/i.test(slug)?'#18212b':'#f7fbff'); const accent=palette.accent || palette.red || palette.primary || (/neon|retro|signal|orbit|creative|grid/i.test(slug)?'#f0dc4d':'#8ff1df'); const hot=palette.hot || palette.red || palette.secondary || '#ff805d'; const soft=palette.line || palette.bg_secondary || '#31506b'; const display=template?.typography?.display || 'system-ui'; const body=template?.typography?.body || 'system-ui';
+  return `--bg:${bg};--ink:${ink};--accent:${accent};--soft:${soft};--hot:${hot};font-family:'${display}',${body},system-ui,sans-serif`;
 }
+function templateVariantCss(slug) { const n=[...String(slug)].reduce((sum,char)=>sum+char.charCodeAt(0),0)%8; const variants=[
+  'body[data-template] .slide h1{max-width:78%;margin-top:14vh}body[data-template] .evidence{left:auto;right:7%;max-width:32%;}',
+  'body[data-template] .slide{padding:5% 10%}body[data-template] h1{max-width:950px;text-align:center;margin-left:auto;margin-right:auto}body[data-template] .thesis{margin-left:auto;margin-right:auto;text-align:center}',
+  'body[data-template] .slide{border:12px solid var(--accent);padding:8%}body[data-template] .line{left:8%;right:8%;top:13%}',
+  'body[data-template] .slide:nth-child(odd){transform-origin:center left}body[data-template] .slide h1{max-width:70%;letter-spacing:-.09em}body[data-template] .mark{transform:rotate(-12deg)}',
+  'body[data-template] .slide{background:radial-gradient(circle at 88% 18%,var(--accent) 0 3%,transparent 3.5%),var(--bg)}body[data-template] .evidence{border-left:4px solid var(--hot);padding-left:18px}',
+  'body[data-template] .slide{padding:9% 7%}body[data-template] h1{font-size:clamp(34px,5.2vw,86px);max-width:900px}body[data-template] .thesis{max-width:680px}',
+  'body[data-template] .slide:nth-child(3n){background:linear-gradient(90deg,var(--bg) 0 48%,var(--soft) 48%)}body[data-template] .evidence{color:var(--ink);background:var(--soft);padding:16px 20px}',
+  'body[data-template] .slide{box-shadow:inset 0 -18px 0 var(--accent)}body[data-template] h1{font-family:Georgia,serif;max-width:980px}body[data-template] .meta{letter-spacing:.28em}'
+]; return variants[n]; }
 
 function dataHtml(data, meta) { return `<!doctype html><meta charset="utf-8"><title>Data · ${esc(data.title)}</title><style>body{font:16px/1.5 system-ui;max-width:1100px;margin:40px auto;padding:0 24px;color:#172437}h1{font-size:40px}table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:13px;border-bottom:1px solid #d5dee8}th{color:#315fd2}.meta{color:#637286;font:12px monospace}</style><h1>${esc(data.title)} · Data</h1><p class="meta">Generation ${esc(meta.generationId)} · ${esc(data.sourceKind)} · ${data.sources.length} source(s)</p><table><thead><tr>${data.columns.map(x=>`<th>${esc(x)}</th>`).join('')}</tr></thead><tbody>${data.rows.map(r=>`<tr>${r.map(x=>`<td>${esc(x)}</td>`).join('')}</tr>`).join('')}</tbody></table><h2>Insights</h2><ul>${data.insights.map(x=>`<li>${esc(x)}</li>`).join('')}</ul><h2>Sources</h2><ul>${data.sources.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`; }
 function narrativeHtml(plan, meta) { return `<!doctype html><meta charset="utf-8"><title>Narrative · ${esc(plan.topic)}</title><style>body{font:18px/1.6 Georgia,serif;max-width:850px;margin:42px auto;padding:0 24px;color:#172437}h1,h2{font-family:system-ui;line-height:1.1}h1{font-size:46px}h2{margin-top:38px;color:#315fd2}.page{border-top:1px solid #bdc7d0;padding:24px 0}.script{background:#fffdf8;padding:18px 22px;box-shadow:0 8px 24px #344a6612}.meta{font:12px monospace;color:#315fd2}.chain{padding:15px;background:#eef3ff;font-family:system-ui}</style><p class="meta">NARRATIVE · ${esc(meta.generationId)} · ${esc(meta.mode)} · ${esc(meta.styleId)}</p><h1>${esc(plan.topic)}</h1><h2>Аудитория</h2><p>${esc(plan.audience)}</p><h2>Главный тезис</h2><p>${esc(plan.centralThesis)}</p><h2>Ситуация</h2><p>${esc(plan.situation)}</p><h2>Доказательства</h2><ul>${plan.evidence.map(x=>`<li>${esc(x)}</li>`).join('')}</ul><h2>Интерпретация</h2><p>${esc(plan.centralThesis)}</p><h2>Риски и неизвестности</h2><ul>${plan.unknowns.map(x=>`<li>${esc(x)}</li>`).join('')}</ul><h2>Следующий шаг</h2><p>${esc(plan.nextStep)}</p><div class="chain">Data → Narrative → Slides · один generationId</div>${plan.scenes.map(s=>`<section class="page"><div class="meta">SLIDE ${String(s.index).padStart(2,'0')} · ${esc(s.visualType)}</div><h2>${esc(s.title)}</h2><p><b>Тезис:</b> ${esc(s.thesis)}</p><p><b>Опора:</b> ${esc(s.evidence.join(' · '))}</p><div class="script"><b>Что сказать:</b><br>${esc(s.speakerScript)}</div></section>`).join('')}`; }
@@ -251,12 +258,14 @@ async function legacyPptx(plan, meta) {
 }
 
 function animateSlides(html) {
+  const slug=(html.match(/<body class="([^"]+)/)||[])[1] || 'professional';
   return html
     .replace('.slide{display:none;', '.slide{display:block;position:absolute!important;inset:0!important;opacity:0;visibility:hidden;transform:translateY(24px) scale(.985);transition:opacity .7s ease,transform .7s cubic-bezier(.2,.8,.2,1),visibility .7s;')
     .replace('.slide{display:block;position:absolute!important;inset:0!important;opacity:0;visibility:hidden;', '.deck{position:fixed;inset:0;display:grid;place-items:center}.slide{display:block!important;position:absolute!important;inset:0!important;opacity:0;visibility:hidden;')
     .replace('.slide.active{display:block}', '.slide.active{opacity:1;visibility:visible;transform:translateY(0) scale(1)}')
     .replace("const s=[...document.querySelectorAll('.slide')];let i=0;function go(n){i=Math.max(0,Math.min(n,s.length-1));s.forEach((x,j)=>x.classList.toggle('active',i===j))}", "const s=[...document.querySelectorAll('.slide')];let i=0;function go(n){const next=Math.max(0,Math.min(n,s.length-1));if(next===i)return;s[i]?.classList.remove('active');s[next]?.classList.add('active');i=next}")
-    .replace('</style><body', '.slide.active h1{animation:rise .8s both}.slide.active .thesis{animation:rise .8s .12s both}.slide.active .evidence{animation:rise .8s .22s both}@keyframes rise{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}</style><body');
+    .replace('</style><body', `${templateVariantCss(slug)}.slide.active h1{animation:rise .8s both}.slide.active .thesis{animation:rise .8s .12s both}.slide.active .evidence{animation:rise .8s .22s both}@keyframes rise{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}</style><body`)
+    .replace('<body class="', `<body data-template="${esc(slug)}" class="`);
 }
 
 const generations = new Map();
