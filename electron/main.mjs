@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, shell, ipcMain } from 'electron';
+import { app, BrowserWindow, Menu, shell, ipcMain, nativeImage } from 'electron';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,15 +41,18 @@ function startServer() {
 
 async function createWindow() {
   const port = await startServer();
+  const iconPath = path.join(root, 'assets', 'icons', 'rnd-icon.png');
+  const appIcon = nativeImage.createFromPath(iconPath);
   const win = new BrowserWindow({
     width: 1440, height: 960, minWidth: 980, minHeight: 700,
     frame: false,
     autoHideMenuBar: true,
     backgroundColor: '#071321',
     title: 'PO Agent Suite · Workstation Computer',
-    icon: path.join(root, 'assets', 'icons', 'rnd-icon.png'),
+    icon: appIcon,
     webPreferences: { preload: path.join(here, 'preload.mjs'), contextIsolation: true, nodeIntegration: false }
   });
+  win.setIcon(appIcon);
   win.webContents.setWindowOpenHandler(({ url }) => { if (url.startsWith(`http://localhost:${port}/api/artifact/`)) { shell.openExternal(url); return { action: 'deny' }; } shell.openExternal(url); return { action: 'deny' }; });
   await win.loadURL(`http://localhost:${port}/`);
 }
