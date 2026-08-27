@@ -22,7 +22,7 @@ const clamp = (n, min, max) => Math.max(min, Math.min(max, Number(n)));
 const idOf = () => `gen-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 const productFixture = {
-  title: 'PO Agent Suite · Workstation Computer', sourceKind: 'product-fixture', sources: ['fixture://po-agent-suite-product'],
+  title: 'PO Agent Suite · Workstation Computer', sourceKind: 'product-fixture', sources: ['fixture://po-agent-suite-product', 'fixture://po-agent-suite-product-lore'],
   columns: ['Слой продукта', 'Проверяемый факт', 'Зачем это PO'],
   rows: [
     ['Chat-first UI', 'public/index.html принимает вопрос, файлы и Temperature', 'Начать с ситуации, а не с меню'],
@@ -38,7 +38,12 @@ const productFixture = {
     ['Generation API', 'каждый запуск получает новый generationId и три URL', 'Не открыть устаревший Blob'],
     ['Quality fixture', 'CSV содержит time_to_insight, artifacts_per_request, manual_steps_removed', 'Проверять эффект числами, когда они есть']
     ,['Workstation computer', 'Electron поднимает собственный сервер и открывает артефакты отдельно', 'Запускать Suite как отдельный рабочий инструмент'],
-    ['Живая ситуация PO', 'На демо команда спорит не о кнопке, а о том, какой риск принять сегодня', 'Перевести разговор из мнений в действие']
+    ['Живая ситуация PO', 'На демо команда спорит не о кнопке, а о том, какой риск принять сегодня', 'Перевести разговор из мнений в действие'],
+    ['Универсальный AI-инструмент', 'Чат с LLM-агентом превращает естественный запрос в таблицу, текст и презентацию', 'Дать PO и руководителю единый поток от хаоса к решению'],
+    ['Источники данных', 'Jira, Trello, GitHub/GitLab, Analytics, CRM, базы, CSV и Excel входят в продуктовый замысел', 'Собирать доказательства рядом с выводом'],
+    ['Кодовый курс', 'codebase-to-course объясняет реальные модули через путь пользователя, код и plain-English', 'Ускорить онбординг и понимание legacy'],
+    ['Frontend slides', 'frontend-slides рендерит визуальные презентации в браузере и поддерживает корпоративные стили', 'Передавать смысл, а не стенограмму'],
+    ['Модули результата', 'DataFetcher → TableGenerator → TextGenerator → SlideGenerator → CourseGenerator', 'Соединить инструменты в один рабочий конвейер']
   ],
   insights: [
     'Чат принимает вопрос и контекст, а не требует знать меню инструментов.',
@@ -55,7 +60,12 @@ const productFixture = {
     'CSV-fixture задаёт проверяемые сигналы: 12 минут до инсайта, 3 артефакта и 7 снятых ручных шагов.',
     'Generation API отдаёт отдельные URL Data, Narrative и Slides, поэтому результаты не смешиваются.',
     'Indexator не входит в Suite: приоритизация бэклога остаётся отдельным продуктом.',
-    'Главная ценность — не объём текста, а более быстрый переход от ситуации к решению.'
+    'Главная ценность — не объём текста, а более быстрый переход от ситуации к решению.',
+    'Продуктовый лор Suite: Open Source, работает из коробки, чат с LLM-агентом ведёт к таблицам, текстам и презентациям.',
+    'Suite рассчитан на PO, Tech Lead, Agile Coach, Scrum Master, руководителя команды и небольшие стартап-команды.',
+    'Боли, которые продукт должен превращать в действие: ручной отчёт по Jira, повторная презентация квартала, непонятный legacy-код и хаотичные требования.',
+    'Поддерживаемая идея архитектуры: пользователь → чат → LLM-агент → планировщик → инструменты → рендер артефактов.',
+    'Продуктовый лор не разрешает выдавать выдуманные демо-цифры за production-измерения и не включает Indexator в Suite.'
     ,'Workstation computer запускает Suite отдельно от браузерного проекта и держит свой generation context.'
   ],
   codeSignals: [
@@ -126,7 +136,7 @@ async function buildData(input) {
   const generated = generatedFixture(Date.now());
   const codebaseFiles = indexed.filter(item => item.file.startsWith('template-library/codebase-to-course/'));
   const codeRow = codebaseFiles.length ? [['codebase-to-course', `${codebaseFiles.length} файлов референсного курса доступны в локальном индексе`, 'Показать код через действие, объяснение и визуальный поток']] : [];
-  return { ...productFixture, ...generated, rows: [...generated.rows, ...codeRow], title: `${promptTitle(input.prompt)} · ${generated.title}`, sourceKind: indexed.length ? 'local-index' : 'product-fixture',
+  return { ...productFixture, ...generated, rows: [...productFixture.rows, ...generated.rows, ...codeRow], title: `${promptTitle(input.prompt)} · ${generated.title}`, sourceKind: indexed.length ? 'local-index' : 'product-fixture',
     sources: indexed.length ? selected.map(x => `local://${x.file}`) : generated.sources,
     insights: [...generated.insights, ...productFixture.insights, `Лёгкий индекс нашёл ${indexed.length} файлов и передал ${selected.length} источников в контекст.`] };
 }
@@ -207,9 +217,9 @@ async function refineScenes(plan, data, temperature) {
   const requests=plan.scenes.slice(0,15).map(async (scene,i)=>{ const controller=new AbortController(); const timer=setTimeout(()=>controller.abort(),3500); try { const r=await fetch(`${base}/chat/completions`,{method:'POST',signal:controller.signal,headers:{'content-type':'application/json'},body:JSON.stringify({model:process.env.LLAMA_MODEL||'local',temperature,messages:[{role:'system',content:'Ты редактор одного слайда Product Owner. Верни только JSON: title, thesis, evidence (1-2 конкретных факта из Data), speakerScript (2-4 живых предложения), visualType. Не повторяй соседние сцены, не придумывай числа.'},{role:'user',content:`Data: ${JSON.stringify(data)}\nВся история: ${plan.centralThesis}\nПредыдущая сцена: ${JSON.stringify(plan.scenes[i-1]||null)}\nТекущая сцена: ${JSON.stringify(scene)}\nСледующая сцена: ${JSON.stringify(plan.scenes[i+1]||null)}`}]})}); if(!r.ok)return scene; const raw=(await r.json()).choices?.[0]?.message?.content||''; const m=raw.match(/\{[\s\S]*\}/); return m?{...scene,...JSON.parse(m[0]),index:i+1}:scene; }catch{return scene}finally{clearTimeout(timer)} });
   return {...plan,scenes:await Promise.all(requests)};
 }
-function normalizePlan(plan, fallback) {
-  if (!plan || !Array.isArray(plan.scenes) || plan.scenes.length < 10) return fallback;
-  return { ...fallback, ...plan, scenes: plan.scenes.slice(0, 15).map((s, i) => ({ ...fallback.scenes[i % fallback.scenes.length], ...s, index:i + 1, visualType:visualTypes.includes(s.visualType) ? s.visualType : 'statement' })) };
+function normalizePlan(plan) {
+  if (!plan || !Array.isArray(plan.scenes) || plan.scenes.length < 10) return null;
+  return { ...plan, evidence:Array.isArray(plan.evidence) ? plan.evidence : [], unknowns:Array.isArray(plan.unknowns) ? plan.unknowns : [], scenes: plan.scenes.slice(0, 15).map((s, i) => ({ ...s, index:i + 1, title:String(s.title || `Сцена ${i + 1}`), thesis:String(s.thesis || ''), evidence:Array.isArray(s.evidence) ? s.evidence : [], speakerScript:String(s.speakerScript || ''), visualType:visualTypes.includes(s.visualType) ? s.visualType : 'statement' })) };
 }
 function selectStyle(temperature, generationId, requested) {
   const styles = templates.length ? templates.map(t => t.slug) : ['editorial','professional','kinetic','diagrammatic']; if (styles.includes(requested)) return requested;
@@ -248,7 +258,7 @@ function animateSlides(html) {
 }
 
 const generations = new Map();
-async function run(input) { const generationId=idOf(), temperature=clamp(input.temperature ?? .7,0,2), data=await buildData(input), fallback=fallbackPlan(input,data,generationId), modelPlan=await llama(input,data,temperature), plan=normalizePlan(modelPlan,fallback), motto=plan.motto || `${plan.centralThesis} Опора доклада — ${data.insights[0] || 'проверяемый сигнал из Data'}.`, styleId=input.style || (/код|codebase|course/i.test(input.prompt || '') ? 'codebase-to-course' : selectStyle(temperature,generationId,input.style)); const mode=modelPlan?'llama.cpp':'demo-local'; const meta={generationId,mode,styleId,temperature,generationVersion}; plan.motto=motto; const files={data:dataHtml(data,meta),narrative:narrativeHtml(plan,meta),slides:animateSlides(slidesHtml(plan,meta)),pptx:await legacyPptx(plan,meta)}; for(const [kind,html] of Object.entries(files)) await fs.writeFile(path.join(exportDir,`${generationId}-${kind}.${kind==='pptx'?'pptx':'html'}`),html); const result={generationId,mode,styleId,temperature,data,narrative:{...plan,generationId},slides:{...plan,generationId},urls:{data:`/api/artifact/${generationId}/data`,narrative:`/api/artifact/${generationId}/narrative`,slides:`/api/artifact/${generationId}/slides`,pptx:`/api/artifact/${generationId}/pptx`}}; generations.set(generationId,{...result,files}); return result; }
+async function run(input) { const generationId=idOf(), temperature=clamp(input.temperature ?? .7,0,2), request={...input,generationId}, data=await buildData(request), modelPlan=await llama(request,data,temperature), plan=normalizePlan(modelPlan); if(!plan) throw new Error('LLM generation unavailable or returned an invalid StoryPlan; demo fallback is disabled.'); const motto=plan.motto || `${plan.centralThesis} Опора доклада — ${data.insights[0] || 'проверяемый сигнал из Data'}.`, styleId=input.style || (/код|codebase|course/i.test(input.prompt || '') ? 'codebase-to-course' : selectStyle(temperature,generationId,input.style)); const mode='llama.cpp'; const meta={generationId,mode,styleId,temperature,generationVersion}; plan.motto=motto; const files={data:dataHtml(data,meta),narrative:narrativeHtml(plan,meta),slides:animateSlides(slidesHtml(plan,meta)),pptx:await legacyPptx(plan,meta)}; for(const [kind,html] of Object.entries(files)) await fs.writeFile(path.join(exportDir,`${generationId}-${kind}.${kind==='pptx'?'pptx':'html'}`),html); const result={generationId,mode,styleId,temperature,data,narrative:{...plan,generationId},slides:{...plan,generationId},urls:{data:`/api/artifact/${generationId}/data`,narrative:`/api/artifact/${generationId}/narrative`,slides:`/api/artifact/${generationId}/slides`,pptx:`/api/artifact/${generationId}/pptx`}}; generations.set(generationId,{...result,files}); return result; }
 async function body(req){let raw='';for await(const chunk of req)raw+=chunk;return raw?JSON.parse(raw):{}}
 function sendJson(res,value,code=200){res.writeHead(code,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));}
 async function handle(req,res){const url=new URL(req.url,'http://localhost'); if(url.pathname==='/api/health')return sendJson(res,{ok:true,generationVersion,pid:process.pid,port:server.address()?.port || port,buildTimestamp,model:process.env.LLAMA_BASE_URL||'http://127.0.0.1:8080/v1'}); if(url.pathname==='/api/run'&&req.method==='POST')return sendJson(res,{ok:true,...await run(await body(req))}); const artifact=url.pathname.match(/^\/api\/artifact\/([^/]+)\/(data|narrative|slides|pptx)$/); if(artifact){const item=generations.get(artifact[1]);if(!item)return sendJson(res,{error:'generation not found'},404);if(artifact[2]==='pptx'){res.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.presentationml.presentation','content-disposition':`attachment; filename="${artifact[1]}-legacy.pptx"`,'cache-control':'no-store'});return res.end(item.files.pptx)}res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});return res.end(item.files[artifact[2]])} const requested=url.pathname==='/'?'/index.html':url.pathname;const file=path.normalize(path.join(publicDir,requested));if(!file.startsWith(publicDir))return sendJson(res,{error:'forbidden'},403);try{const data=await fs.readFile(file);res.writeHead(200,{'content-type':'text/html; charset=utf-8'});res.end(data)}catch{sendJson(res,{error:'not found'},404)}}
