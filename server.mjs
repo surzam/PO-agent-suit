@@ -13,7 +13,7 @@ const generationVersion = '2.0.0-pipeline';
 const buildTimestamp = new Date().toISOString();
 await fs.mkdir(exportDir, { recursive: true });
 const templateIndex = await fs.readFile(path.join(templateDir, 'index.json'), 'utf8').then(JSON.parse).catch(() => ({ templates: [] }));
-const templates = templateIndex.templates || [];
+const templates = await Promise.all((templateIndex.templates || []).map(async template => ({ ...template, ...await fs.readFile(path.join(templateDir, 'templates', template.slug, 'template.json'), 'utf8').then(JSON.parse).catch(() => ({})) })));
 const codeCourseTemplate = { slug: 'codebase-to-course', name: 'Codebase to Course', description: 'Кодовый ракурс: файл, действие, объяснение.' };
 if (!templates.some(template => template.slug === codeCourseTemplate.slug)) templates.push(codeCourseTemplate);
 
