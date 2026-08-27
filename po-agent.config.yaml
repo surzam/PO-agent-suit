@@ -1,0 +1,25 @@
+llm:
+  discovery: auto
+  provider: llama.cpp
+  base_url: http://127.0.0.1:8080/v1
+  model: local
+  api_key: optional
+
+workspace:
+  root: ./workspace
+  exports: ./workspace/exports
+  database: ./workspace/po-agent.sqlite
+
+sources:
+  allow: [files, git]
+  external_connectors: disabled
+
+artifacts:
+  tables: { formats: [csv, xlsx] }
+  narrative: { formats: [markdown, docx] }
+  slides: { formats: [html, pdf, pptx], engine: frontend-slides, marp_compatibility: enabled }
+
+style:
+  language: ru
+  tone: professional
+  slide_template: auto

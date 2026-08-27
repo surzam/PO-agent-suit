@@ -1,0 +1,5 @@
+metric,value,period
+time_to_insight,12,minutes
+artifacts_per_request,3,count
+manual_steps_removed,7,count
+supported_local_sources,4,count

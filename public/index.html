@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PO Agent Suite · Workstation Computer</title>
+  <style>
+    :root{--bg:#071321;--ink:#f7fbff;--accent:#8ff1df;--hot:#ff805d;--font:Inter,system-ui,sans-serif;--turn:0deg}
+    *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden}
+    body{background:var(--bg);color:var(--ink);font-family:var(--font);transition:background .8s,color .8s}
+    .stage{min-height:100vh;display:grid;place-items:center;position:relative;padding:8vw;-webkit-app-region:drag}
+    .brand{display:none}
+    .close{position:fixed;z-index:20;top:22px;right:26px;width:42px;height:42px;border:1px solid color-mix(in srgb,var(--ink),transparent 60%);border-radius:50%;background:transparent;color:var(--ink);font:300 28px/36px system-ui;cursor:pointer;-webkit-app-region:no-drag;transition:.25s}.close:hover{background:var(--hot);border-color:var(--hot);color:var(--bg);transform:rotate(90deg)}
+    .brand b{color:var(--hot)}.brand i{font-style:normal;color:var(--ink)}
+    .title{max-width:1050px;text-align:center;font:900 clamp(32px,6vw,92px)/.9 var(--font);letter-spacing:-.07em;transform:rotate(var(--turn));transition:all .8s}.title b{color:var(--hot)}.ready .brand{display:none}
+    .mark{position:absolute;top:7vh;right:7vw;color:var(--accent);font:clamp(20px,3vw,44px) monospace;transform:rotate(var(--turn));transition:all .8s}
+    .controls{position:fixed;z-index:10;bottom:max(28px,6vh);left:50%;transform:translateX(-50%);display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;max-width:calc(100vw - 40px);-webkit-app-region:no-drag}
+    .button,.artifact{border:1px solid color-mix(in srgb,var(--ink),transparent 45%);background:transparent;color:var(--ink);font:700 12px monospace;padding:14px 18px;cursor:pointer;transition:.3s;-webkit-app-region:no-drag}
+    .button{background:var(--accent);border-color:var(--accent);color:var(--bg);min-width:170px}.button:hover,.artifact:hover{background:var(--hot);border-color:var(--hot);color:var(--bg)}.button:disabled{opacity:.82;cursor:wait}.artifact{display:none;text-decoration:none}.ready .artifact{display:block}.loading .title{opacity:.2}
+    body.waiting{background:radial-gradient(circle at 50% 38%,#263b52 0,#101c2b 42%,#071321 100%)}body.waiting .title{opacity:1}body.waiting .button{min-width:220px}
+    body.layout-1 .title{text-align:left;margin-right:auto;max-width:850px}body.layout-1 .mark{transform:rotate(8deg) scale(1.3)}
+    body.layout-2 .title{font-family:Georgia,serif;letter-spacing:-.06em}body.layout-2 .brand{top:auto;bottom:7vh}
+    body.layout-3 .title{text-transform:uppercase;transform:rotate(-2deg) scale(1.04)}body.layout-4 .title{font-weight:500;letter-spacing:-.04em;text-align:left;margin-right:auto}body.layout-5 .title{font-family:Georgia,serif;font-style:italic;max-width:900px}
+    @media(max-width:650px){.brand{top:28px;left:20px}.mark{top:30px;right:20px}.controls{bottom:28px;flex-direction:column}.title{font-size:clamp(36px,12vw,90px)}}
+  </style>
+</head>
+<body class="loading"><main class="stage"><div class="brand"><b>PO</b><i> Agent Suite · Workstation Computer</i></div><div class="mark">✦ ◌ ↗</div><div class="title" id="title">PO Agent Suite · Workstation Computer</div><div class="controls"><button class="button" id="run">Генерировать</button><div id="artifacts"><a class="artifact" id="data" target="_blank" rel="noopener">Data</a><a class="artifact" id="narrative" target="_blank" rel="noopener">Narrative</a><a class="artifact" id="slides" target="_blank" rel="noopener">Slides</a><a class="artifact" id="pptx" download>⬇ PPTX LEGACY</a></div></div></main>
+<script>
+const $=s=>document.querySelector(s);const fullTitle='PO Agent Suite · Workstation Computer';let lastMotto='Следующий ракурс';
+const closeButton=document.createElement('button');closeButton.className='close';closeButton.type='button';closeButton.setAttribute('aria-label','Закрыть');closeButton.textContent='×';closeButton.onclick=()=>{if(window.poDesktop?.close)window.poDesktop.close();else window.close()};document.body.append(closeButton);
+function applyStyle(style){const palettes=[['#071321','#f7fbff','#8ff1df','#ff805d','Inter,system-ui,sans-serif'],['#f3eee4','#18212b','#1d5c45','#d77a5b','Georgia,serif'],['#21133d','#fff9ef','#f0dc4d','#ff6d8b','Impact,system-ui,sans-serif'],['#eef3f7','#14263a','#1e65d6','#f07b4f','ui-monospace,monospace'],['#241b16','#fff6e8','#ffb86b','#f06f52','ui-monospace,monospace'],['#17251f','#f5f1df','#d3e87a','#e8865b','Trebuchet MS,sans-serif'],['#30251f','#fffaf1','#e9a86a','#b84d5a','Georgia,serif'],['#101010','#f5f5f0','#ffffff','#e95555','Arial Narrow,Arial,sans-serif']];const n=[...String(style||'professional')].reduce((a,c)=>a+c.charCodeAt(0),0);const p=palettes[n%palettes.length];['--bg','--ink','--accent','--hot','--font'].forEach((key,i)=>document.documentElement.style.setProperty(key,p[i]));const layout=n%6;document.body.dataset.layout=layout;document.body.className=`ready layout-${layout}`}
+async function generate(){const b=$('#run');b.disabled=true;b.textContent='Генерирую новый ракурс…';document.body.className='waiting';$('#title').textContent=fullTitle;try{const r=await fetch('/api/run',{method:'POST',headers:{'content-type':'application/json'},body:'{}'}),x=await r.json();if(!r.ok)throw Error(x.error||'generation failed');applyStyle(x.styleId);lastMotto=x.narrative?.motto||x.narrative?.centralThesis||lastMotto;$('#title').textContent=lastMotto;for(const k of ['data','narrative','slides','pptx'])$('#'+k).href=x.urls[k];b.textContent='Генерировать ещё'}catch(e){applyStyle('professional');$('#title').textContent=fullTitle;console.error(e)}finally{b.disabled=false}}
+$('#run').onclick=generate;setTimeout(generate,300);
+</script></body></html>

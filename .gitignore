@@ -1,0 +1,5 @@
+node_modules/
+workspace/exports/
+workspace/*.html
+template-library/codebase-to-course/.git/
+.DS_Store

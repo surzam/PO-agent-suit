@@ -1,0 +1,47 @@
+{
+  "name": "po-agent-suite",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.mjs",
+  "scripts": {
+    "dev": "node server.mjs",
+    "start": "node server.mjs",
+    "check": "node --check server.mjs && node --check electron/main.mjs && node --check electron/preload.mjs",
+    "app": "electron --no-sandbox electron/main.mjs",
+    "launch": "bash launch.sh",
+    "package": "electron-builder --linux AppImage deb"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "local.poagent.suite",
+    "productName": "PO Agent Suite · Workstation Computer",
+    "files": [
+      "electron/**/*",
+      "public/**/*",
+      "server.mjs",
+      "package.json",
+      "assets/icons/**/*",
+      "template-library/index.json",
+      "template-library/templates/**/*",
+      "template-library/codebase-to-course/**/*"
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility",
+      "icon": "assets/icons"
+    }
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "pptxgenjs": "^3.12.0"
+  }
+}
