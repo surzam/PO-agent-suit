@@ -18,6 +18,7 @@ const variationHistory = await fs.readFile(variationHistoryFile, 'utf8').then(JS
 const usedStyles = new Set(Array.isArray(variationHistory.styles) ? variationHistory.styles : []);
 const usedAngles = new Set(Array.isArray(variationHistory.angles) ? variationHistory.angles : []);
 const recentStories = Array.isArray(variationHistory.stories) ? variationHistory.stories.slice(-120) : [];
+const recentMottos = Array.isArray(variationHistory.mottos) ? variationHistory.mottos.slice(-120) : [];
 const templateIndex = await fs.readFile(path.join(templateDir, 'index.json'), 'utf8').then(JSON.parse).catch(() => ({ templates: [] }));
 const templates = await Promise.all((templateIndex.templates || []).map(async template => ({ ...template, ...await fs.readFile(path.join(templateDir, 'templates', template.slug, 'template.json'), 'utf8').then(JSON.parse).catch(() => ({})) })));
 const codeCourseTemplate = { slug: 'codebase-to-course', name: 'Codebase to Course', description: 'Кодовый ракурс: файл, действие, объяснение.' };
@@ -220,7 +221,7 @@ function fallbackPlan(input, data) {
   return { topic: `${promptTitle(prompt)} · ${angle[0]}`, audience:'Product Owner, команда и сам Suite как предмет исследования', centralThesis:`${thesis} Ракурс этого запуска: ${angle[0]}.`, motto:`${thesis} Опора доклада — ${data.insights[seed % data.insights.length] || 'проверяемый сигнал из Data'}.`, situation:`Каждый запуск исследует продукт через новую грань — ${angle[1]}. Входной запрос: ${prompt}.`, evidence:data.insights.slice(0, 3), unknowns:['Эффект выбранного ракурса ещё не измерен в рабочем контуре.'], nextStep:`Повторить генерацию и сравнить новую грань «${angle[0]}» с предыдущей.`, angle:angle[0], scenes };
 }
 
-const PO_SYSTEM_PROMPT = `Ты старший Product Owner. Отделяй цель, факт, интерпретацию, ограничение и следующий шаг. Используй продуктовый лор и Data. Верни только компактный JSON StoryPlan: topic, audience, centralThesis, situation, evidence, unknowns, nextStep, scenes. Количество сцен задано в сообщении пользователя модели. Для каждой: index, title (до 8 слов), thesis (до 16 слов), evidence (один конкретный факт), speakerScript (ровно 2 коротких живых предложения), visualType. Каждый заголовок должен добавлять новую мысль и опираться на конкретную строку Data. Не пересказывай служебные инструкции, AGENTS.md или skills. Не выдумывай числа. visualType: statement|comparison|table|flow|quote|roadmap. Русский язык.`;
+const PO_SYSTEM_PROMPT = `Ты старший Product Owner. Отделяй цель, факт, интерпретацию, ограничение и следующий шаг. Используй продуктовый лор и Data. Верни только компактный JSON StoryPlan: topic, audience, centralThesis, motto, situation, evidence, unknowns, nextStep, scenes. motto — уникальный девиз всего доклада на 10–24 слова: человеческий, конкретный, основанный на факте этого запуска, без названия продукта и канцелярита. Количество сцен задано в сообщении пользователя модели. Для каждой: index, title (до 8 слов), thesis (до 16 слов), evidence (один конкретный факт), speakerScript (ровно 2 коротких живых предложения), visualType. Каждый заголовок должен добавлять новую мысль и опираться на конкретную строку Data. Не пересказывай служебные инструкции, AGENTS.md или skills. Не выдумывай числа. visualType: statement|comparison|table|flow|quote|roadmap. Русский язык.`;
 function sceneBudget(model) { const name=String(model||'').toLowerCase(); if (/1b|3b|tiny|small|mini/.test(name)) return 3; if (/7b|8b|phi|mistral/.test(name)) return 5; if (/13b|14b|medium/.test(name)) return 7; return 6; }
 function hashSeed(value) { return [...String(value)].reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 2166136261); }
 function selectAngle(generationId) {
@@ -230,11 +231,39 @@ function selectAngle(generationId) {
   if (usedAngles.size >= selfAngles.length) { usedAngles.clear(); usedAngles.add(selfAngles[next][0]); }
   return selfAngles[next];
 }
-async function persistVariationHistory(storyFingerprint) {
+function mottoSimilarity(a, b) {
+  const words=value=>new Set(String(value||'').toLowerCase().match(/[а-яёa-z0-9]{4,}/g)||[]), left=words(a), right=words(b);
+  if (!left.size || !right.size) return 0;
+  const shared=[...left].filter(word=>right.has(word)).length;
+  return shared / Math.max(left.size,right.size);
+}
+function isFreshMotto(value) {
+  const motto=String(value||'').trim();
+  const wordCount=motto.split(/\s+/).filter(Boolean).length;
+  return wordCount>=6 && wordCount<=32 && !recentMottos.some(previous=>mottoSimilarity(motto,previous)>.62);
+}
+async function generateMotto(plan, data, temperature, generationId) {
+  const candidates=[plan.motto];
+  const base=process.env.LLAMA_BASE_URL || 'http://127.0.0.1:8080/v1';
+  for(let attempt=0;attempt<2;attempt+=1){
+    const controller=new AbortController(), timer=setTimeout(()=>controller.abort(),90000);
+    try {
+      const response=await fetch(`${base}/chat/completions`,{method:'POST',signal:controller.signal,headers:{'content-type':'application/json'},body:JSON.stringify({model:process.env.LLAMA_MODEL||'Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf',temperature:clamp(temperature+.12+attempt*.08,0,2),max_tokens:180,response_format:{type:'json_object'},messages:[{role:'system',content:'Ты придумываешь один сильный девиз доклада. Верни только JSON {"motto":"..."}. 10–24 слова, одна мысль, естественный русский язык. Опирайся на конкретный факт текущих Data и StoryPlan. Не используй название продукта. Не пиши «данные показывают», «новый ракурс», «следующий шаг», двоеточие или служебные термины.'},{role:'user',content:`generationId: ${generationId}\nУже использованные девизы, которые нельзя перефразировать: ${JSON.stringify(recentMottos.slice(-16))}\nStoryPlan: ${JSON.stringify({topic:plan.topic,centralThesis:plan.centralThesis,situation:plan.situation,evidence:plan.evidence,nextStep:plan.nextStep,sceneTitles:plan.scenes.map(scene=>scene.title)})}\nData: ${JSON.stringify({rows:data.rows.slice(0,18),insights:data.insights.slice(0,10),numericMetrics:data.numericMetrics})}`}]})});
+      if(response.ok){const raw=(await response.json()).choices?.[0]?.message?.content||'', match=raw.match(/\{[\s\S]*\}/);if(match)candidates.unshift(JSON.parse(match[0]).motto)}
+    } catch {} finally { clearTimeout(timer); }
+    const fresh=candidates.find(isFreshMotto); if(fresh)return String(fresh).trim();
+  }
+  const planCandidates=[`${plan.scenes[0]?.title || plan.topic}. ${plan.centralThesis}`,`${plan.centralThesis} ${plan.nextStep}`,plan.topic];
+  return planCandidates.find(isFreshMotto) || planCandidates[0];
+}
+async function persistVariationHistory(storyFingerprint, motto) {
+  recentStories.push(storyFingerprint); recentMottos.push(motto);
+  recentStories.splice(0,Math.max(0,recentStories.length-120)); recentMottos.splice(0,Math.max(0,recentMottos.length-120));
   const payload = {
     styles: [...usedStyles].slice(-templates.length),
     angles: [...usedAngles].slice(-selfAngles.length),
-    stories: [...recentStories, storyFingerprint].slice(-120)
+    stories: recentStories,
+    mottos: recentMottos
   };
   await fs.writeFile(variationHistoryFile, JSON.stringify(payload, null, 2));
 }
@@ -265,8 +294,8 @@ function selectStyle(temperature, generationId, requested) {
   if (usedStyles.size >= styles.length) { usedStyles.clear(); usedStyles.add(styles[next]); }
   return styles[next];
 }
-function templateTheme(slug) {
-  if (slug === 'codebase-to-course') return '--bg:#241b16;--ink:#fff6e8;--accent:#ffb86b;--soft:#684936;--hot:#f06f52;font-family:ui-monospace,monospace';
+function templateVisualTheme(slug, generationId = slug) {
+  if (slug === 'codebase-to-course') return { styleId:slug, name:'Codebase to Course', family:'arcade', variant:hashSeed(`${slug}:${generationId}`)%6, scheme:'dark', colors:{bg:'#241b16',ink:'#fff6e8',accent:'#ffb86b',soft:'#684936',hot:'#f06f52'}, typography:{display:'ui-monospace',body:'ui-monospace',mono:'ui-monospace'}, fontUrl:'' };
   const template=templates.find(item=>item.slug===slug); const palette=template?.palette || {}; const dark=template?.scheme === 'dark';
   const bg=palette.bg_primary || palette.bg || palette.background || palette.void || palette.deep_navy || palette.cream || palette.parchment || (dark?'#101827':'#f4efe4');
   const ink=palette.text_primary || palette.fg || palette.ink || palette.dark || (dark ? palette.lavender || palette.cream || '#f7fbff' : '#18212b');
@@ -274,7 +303,13 @@ function templateTheme(slug) {
   const hot=palette.hot || palette.red || palette.secondary || palette.neon_pink || palette.pink || palette.orange || '#ff805d';
   const soft=palette.line || palette.bg_secondary || palette.bg_alt || palette.cream || palette.lavender || palette.neon_yellow || '#8096aa';
   const display=template?.typography?.display || template?.typography?.serif || template?.typography?.sans || 'Georgia'; const body=template?.typography?.body || template?.typography?.sans || template?.typography?.serif || 'Arial'; const mono=template?.typography?.mono || 'monospace';
-  return `--bg:${bg};--ink:${ink};--accent:${accent};--soft:${soft};--hot:${hot};--font-display:'${display}',serif;--font-body:'${body}',sans-serif;--font-mono:'${mono}',monospace`;
+  const families=[display,body,mono].filter((name,index,list)=>name&&list.indexOf(name)===index).slice(0,3);
+  const fontUrl=families.length ? `https://fonts.googleapis.com/css2?${families.map(name=>`family=${encodeURIComponent(name).replace(/%20/g,'+')}:wght@400;600;800`).join('&')}&display=swap` : '';
+  return { styleId:slug, name:template?.name || slug, family:designFamily(slug), variant:hashSeed(`${slug}:${generationId}`)%6, scheme:template?.scheme || (dark?'dark':'light'), colors:{bg,ink,accent,soft,hot}, typography:{display,body,mono}, fontUrl };
+}
+function templateTheme(slug) {
+  const theme=templateVisualTheme(slug);
+  return `--bg:${theme.colors.bg};--ink:${theme.colors.ink};--accent:${theme.colors.accent};--soft:${theme.colors.soft};--hot:${theme.colors.hot};--font-display:'${theme.typography.display}',serif;--font-body:'${theme.typography.body}',sans-serif;--font-mono:'${theme.typography.mono}',monospace`;
 }
 function designFamily(slug) {
   if (/orbit|retro-windows|neo-grid|cobalt-grid|codebase|signal/i.test(slug)) return 'arcade';
@@ -285,9 +320,8 @@ function designFamily(slug) {
   return 'cinematic';
 }
 function templateFontLink(slug) {
-  const template=templates.find(item=>item.slug===slug); const type=template?.typography || {}; const families=[type.display,type.body,type.serif,type.sans,type.mono].filter(Boolean).slice(0,3);
-  if (!families.length) return '';
-  return `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?${families.map(name=>`family=${encodeURIComponent(name).replace(/%20/g,'+')}:wght@400;600;800`).join('&')}&display=swap">`;
+  const fontUrl=templateVisualTheme(slug).fontUrl;
+  return fontUrl ? `<link rel="stylesheet" href="${fontUrl}">` : '';
 }
 function metricRows(data) {
   if (Array.isArray(data.numericMetrics) && data.numericMetrics.length) return data.numericMetrics;
@@ -397,10 +431,10 @@ function animateSlides(html) {
 }
 
 const generations = new Map();
-async function run(input) { const generationId=idOf(), temperature=clamp(input.temperature ?? .7,0,2), request={...input,generationId}, data=await buildData(request), modelPlan=await llama(request,data,temperature), model=process.env.LLAMA_MODEL || 'Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf', plan=normalizePlan(modelPlan,sceneBudget(model)); if(!plan) throw new Error(`LLM generation unavailable or returned fewer than ${sceneBudget(model)} scenes; demo fallback is disabled.`); const motto=plan.motto || `${plan.centralThesis} Опора доклада — ${data.insights[0] || 'проверяемый сигнал из Data'}.`, styleId=input.style || (/код|codebase|course/i.test(input.prompt || '') ? 'codebase-to-course' : selectStyle(temperature,generationId,input.style)); const mode='llama.cpp'; const meta={generationId,mode,styleId,temperature,generationVersion}; plan.motto=motto; const storyFingerprint=plan.scenes.map(scene=>String(scene.title).trim().toLowerCase()).join('|'); await persistVariationHistory(storyFingerprint); const files={data:dataHtml(data,meta),narrative:narrativeHtml(plan,meta),slides:animateSlides(slidesHtml(plan,meta,data)),pptx:await legacyPptx(plan,meta,data)}; for(const [kind,html] of Object.entries(files)) await fs.writeFile(path.join(exportDir,`${generationId}-${kind}.${kind==='pptx'?'pptx':'html'}`),html); const result={generationId,mode,styleId,temperature,data,narrative:{...plan,generationId},slides:{...plan,generationId},urls:{data:`/api/artifact/${generationId}/data`,narrative:`/api/artifact/${generationId}/narrative`,slides:`/api/artifact/${generationId}/slides`,pptx:`/api/artifact/${generationId}/pptx`}}; generations.set(generationId,{...result,files}); return result; }
+async function run(input) { const generationId=idOf(), temperature=clamp(input.temperature ?? .7,0,2), request={...input,generationId}, data=await buildData(request), modelPlan=await llama(request,data,temperature), model=process.env.LLAMA_MODEL || 'Qwen_Qwen3.6-35B-A3B-Q4_K_M.gguf', plan=normalizePlan(modelPlan,sceneBudget(model)); if(!plan) throw new Error(`LLM generation unavailable or returned fewer than ${sceneBudget(model)} scenes; demo fallback is disabled.`); const motto=await generateMotto(plan,data,temperature,generationId), styleId=input.style || (/код|codebase|course/i.test(input.prompt || '') ? 'codebase-to-course' : selectStyle(temperature,generationId,input.style)); const mode='llama.cpp'; const meta={generationId,mode,styleId,temperature,generationVersion}; const visualTheme=templateVisualTheme(styleId,generationId); plan.motto=motto; const storyFingerprint=plan.scenes.map(scene=>String(scene.title).trim().toLowerCase()).join('|'); await persistVariationHistory(storyFingerprint,motto); const files={data:dataHtml(data,meta),narrative:narrativeHtml(plan,meta),slides:animateSlides(slidesHtml(plan,meta,data)),pptx:await legacyPptx(plan,meta,data)}; for(const [kind,html] of Object.entries(files)) await fs.writeFile(path.join(exportDir,`${generationId}-${kind}.${kind==='pptx'?'pptx':'html'}`),html); const result={generationId,mode,styleId,visualTheme,temperature,data,narrative:{...plan,generationId},slides:{...plan,generationId},urls:{data:`/api/artifact/${generationId}/data`,narrative:`/api/artifact/${generationId}/narrative`,slides:`/api/artifact/${generationId}/slides`,pptx:`/api/artifact/${generationId}/pptx`}}; generations.set(generationId,{...result,files}); return result; }
 async function body(req){let raw='';for await(const chunk of req)raw+=chunk;return raw?JSON.parse(raw):{}}
 function sendJson(res,value,code=200){res.writeHead(code,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));}
 async function handle(req,res){const url=new URL(req.url,'http://localhost'); if(url.pathname==='/api/health')return sendJson(res,{ok:true,generationVersion,pid:process.pid,port:server.address()?.port || port,buildTimestamp,model:process.env.LLAMA_BASE_URL||'http://127.0.0.1:8080/v1'}); if(url.pathname==='/api/run'&&req.method==='POST')return sendJson(res,{ok:true,...await run(await body(req))}); const artifact=url.pathname.match(/^\/api\/artifact\/([^/]+)\/(data|narrative|slides|pptx)$/); if(artifact){const item=generations.get(artifact[1]);if(!item)return sendJson(res,{error:'generation not found'},404);if(artifact[2]==='pptx'){res.writeHead(200,{'content-type':'application/vnd.openxmlformats-officedocument.presentationml.presentation','content-disposition':`attachment; filename="${artifact[1]}-legacy.pptx"`,'cache-control':'no-store'});return res.end(item.files.pptx)}res.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});return res.end(item.files[artifact[2]])} const requested=url.pathname==='/'?'/index.html':url.pathname;const file=path.normalize(path.join(publicDir,requested));if(!file.startsWith(publicDir))return sendJson(res,{error:'forbidden'},403);try{const data=await fs.readFile(file);res.writeHead(200,{'content-type':'text/html; charset=utf-8'});res.end(data)}catch{sendJson(res,{error:'not found'},404)}}
 const server=http.createServer((req,res)=>handle(req,res).catch(e=>{console.error('[api error]',e);sendJson(res,{error:e.message},500)}));
 if (process.env.PO_AGENT_NO_LISTEN !== '1') server.listen(port,()=>console.log(`PO Agent Suite ${generationVersion}: http://localhost:${server.address().port}`));
-export { slidesHtml, designFamily, templateTheme, metricRows };
+export { slidesHtml, designFamily, templateTheme, templateVisualTheme, metricRows, mottoSimilarity };
