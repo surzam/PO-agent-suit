@@ -7,6 +7,13 @@ cd "$APP_DIR"
 command -v node >/dev/null 2>&1 || { echo 'Нужен Node.js 18+.' >&2; exit 1; }
 command -v npm >/dev/null 2>&1 || { echo 'Нужен npm.' >&2; exit 1; }
 
+# Register a real desktop launcher so Linux associates the window with the R&D icon.
+APP_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
+APP_LAUNCHERS_DIR="$APP_DATA_DIR/applications"
+mkdir -p "$APP_LAUNCHERS_DIR"
+cp "$APP_DIR/po-agent-suite.desktop" "$APP_LAUNCHERS_DIR/po-agent-suite.desktop"
+chmod 644 "$APP_LAUNCHERS_DIR/po-agent-suite.desktop"
+
 if [ ! -x "$APP_DIR/node_modules/.bin/electron" ]; then
   echo 'Устанавливаю зависимости Electron…'
   npm install
