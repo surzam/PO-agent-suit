@@ -18,12 +18,15 @@ const plan = {
 };
 const data = { rows:[], numericMetrics:[['time_to_insight',12,'minutes','demo'],['steps_removed',7,'steps','demo']] };
 const themes = new Set(), families = new Set();
+const chartClass = { editorial:'data-lollipop', arcade:'data-pixels', brutal:'data-blocks', playful:'data-bubbles', diagrammatic:'data-line', cinematic:'data-orbit' };
 
 for (const slug of slugs) {
   const html = slidesHtml(plan, { styleId:slug, generationId:`audit-${slug}` }, data);
   themes.add(templateTheme(slug)); families.add(designFamily(slug));
   assert.equal((html.match(/<section class="slide/g) || []).length, plan.scenes.length, `${slug}: scene count`);
-  assert.equal((html.match(/<aside class="chart/g) || []).length, 2, `${slug}: no more than one chart per five slides`);
+  assert.equal((html.match(/<figure class="data-visual/g) || []).length, 2, `${slug}: no more than one data visual per five slides`);
+  assert.ok(html.includes(chartClass[designFamily(slug)]), `${slug}: family-specific data visual`);
+  assert.ok(!html.includes('<aside class="chart'), `${slug}: no generic floating chart`);
   assert.ok(html.includes('width:1920px;height:1080px'), `${slug}: fixed 16:9 stage`);
   assert.ok(html.includes('deck-stage'), `${slug}: stage wrapper`);
   for (const type of new Set(visualTypes)) assert.ok(html.includes(`data-visual="${type}"`), `${slug}: ${type} renderer`);
@@ -33,4 +36,4 @@ for (const slug of slugs) {
 assert.equal(slugs.length, 35, 'full template library');
 assert.equal(themes.size, slugs.length, 'every template has a unique theme token set');
 assert.equal(families.size, 6, 'six structurally distinct design families');
-console.log(`slides audit: ${slugs.length} templates · ${themes.size} unique themes · ${families.size} families · 6 visual renderers · PASS`);
+console.log(`slides audit: ${slugs.length} templates · ${themes.size} unique themes · ${families.size} families · 6 scene renderers · 6 family-specific data visuals · PASS`);
