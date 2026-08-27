@@ -42,7 +42,7 @@ async function createWindow() {
     autoHideMenuBar: true,
     backgroundColor: '#071321',
     title: 'PO Agent Suite · Workstation Computer',
-    icon: path.join(root, 'assets', 'icons', 'po-agent-suite.png'),
+    icon: path.join(root, 'assets', 'icons', '256x256.png'),
     webPreferences: { preload: path.join(here, 'preload.mjs'), contextIsolation: true, nodeIntegration: false }
   });
   win.webContents.setWindowOpenHandler(({ url }) => { if (url.startsWith(`http://localhost:${port}/api/artifact/`)) { shell.openExternal(url); return { action: 'deny' }; } shell.openExternal(url); return { action: 'deny' }; });
