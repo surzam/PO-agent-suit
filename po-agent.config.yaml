@@ -35,7 +35,7 @@ research:
     allowed_paths: [.] # paths are resolved inside the application root only
     max_files: 200
     max_file_bytes: 1048576
-    exclude: [AGENTS.md, README.md, skills, tests, public, workspace/exports, node_modules, .git, .opencode]
+    exclude: [AGENTS.md, README.md, skills, tests, scripts, public, workspace/exports, graphify-out, node_modules, .git, .opencode]
 
 artifacts:
   tables: { formats: [csv, xlsx] }

@@ -18,6 +18,13 @@ chmod 644 "$APP_LAUNCHERS_DIR/po-agent-suite.desktop"
 pkill -f "$APP_DIR/node_modules/electron" 2>/dev/null || true
 pkill -f "$APP_DIR/node_modules/.bin/electron" 2>/dev/null || true
 pkill -f "$APP_DIR/server.mjs" 2>/dev/null || true
+# Older builds sometimes showed only `node server.mjs` in the process list.
+# Resolve their cwd before stopping them so unrelated Node servers are untouched.
+while read -r pid; do
+  [ -n "$pid" ] || continue
+  process_cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
+  [ "$process_cwd" = "$APP_DIR" ] && kill "$pid" 2>/dev/null || true
+done < <(pgrep -f 'node (.+/)?server\.mjs' 2>/dev/null || true)
 sleep 1
 
 if [ ! -x "$APP_DIR/node_modules/.bin/electron" ]; then

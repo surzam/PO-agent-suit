@@ -7,7 +7,7 @@ import { Readability } from '@mozilla/readability';
 import pdf from 'pdf-parse/lib/pdf-parse.js';
 
 const SUPPORTED = /\.(md|markdown|txt|json|csv|tsv|ya?ml|js|mjs|cjs|ts|tsx|jsx|html|css|py|go|rs|java|kt|sql|pdf)$/i;
-const EXCLUDED_DIRS = new Set(['.git', 'node_modules', 'skills', 'tests', 'test', 'public', 'workspace', 'exports', '.opencode', '.codex', 'dist', 'build']);
+const EXCLUDED_DIRS = new Set(['.git', 'node_modules', 'skills', 'tests', 'test', 'scripts', 'public', 'workspace', 'exports', 'graphify-out', '.opencode', '.codex', 'dist', 'build']);
 const EXCLUDED_FILES = /^(AGENTS\.md|README\.md|package-lock\.json|\.env(?:\..*)?|.*\.(?:pem|key|p12|pfx))$/i;
 
 export function isPrivateAddress(address) {

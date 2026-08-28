@@ -284,6 +284,7 @@ async function modelJson(system, user, { signal, temperature = 0.7, maxTokens = 
       body: JSON.stringify({
         model: process.env.LLAMA_MODEL || appConfig.llm?.model || 'local',
         temperature: clamp(temperature, 0, 2), max_tokens: maxTokens,
+        chat_template_kwargs: { enable_thinking:false },
         response_format: { type: 'json_object' },
         messages: [{ role: 'system', content: system }, { role: 'user', content: user }]
       })
@@ -473,13 +474,25 @@ function narrativeMarkdown(plan, research, meta) {
 
 async function renderResearchGeneration({ generationId, brief, research, data, signal, temperature = 0.7, style }) {
   const model = process.env.LLAMA_MODEL || appConfig.llm?.model || 'local';
-  const count = sceneBudget(model);
+  const quickRandom = brief.origin === 'random';
+  const count = quickRandom ? 3 : sceneBudget(model);
   const evidenceCatalog = research.evidence.map(item => ({ id:item.id, claim:item.claim, confidence:item.confidence, kind:item.kind, sourceTitle:item.sourceTitle }));
   const modelPlan = await modelJson(
-    `${PO_SYSTEM_PROMPT} Для каждой сцены обязательно верни evidenceIds — массив существующих ID из Evidence. Не превращай interpretation или unknown в факт. Добавь transition — естественный переход к следующей сцене. История должна отвечать именно на ResearchBrief, а не быть обзором приложения.`,
-    `Сделай ${count}–${Math.min(15, count + 3)} сцен. ResearchBrief: ${JSON.stringify(brief)}\nEvidence: ${JSON.stringify(evidenceCatalog)}\nData: ${JSON.stringify(data)}\nНе повторяй эти прошлые структуры: ${recentStories.slice(-8).join(' || ')}`,
-    { signal, temperature, maxTokens: Math.max(1600, count * 320) }
+    quickRandom
+      ? 'Ты Product Owner и редактор короткого доклада. Из локальных Evidence придумай неожиданный, но проверяемый ракурс на PO Agent Suite. Верни ТОЛЬКО компактный JSON: topic, centralThesis, motto и scenes — ровно 3 объекта {title,thesis,evidenceIds,speakerScript,visualType}. title до 6 слов, thesis до 14 слов, speakerScript ровно 2 очень коротких предложения. evidenceIds содержит только существующие ID. visualType: statement|comparison|table|flow|quote|roadmap. Не добавляй другие поля, markdown, вымышленные возможности или числа. Русский язык.'
+      : `${PO_SYSTEM_PROMPT} Для каждой сцены обязательно верни evidenceIds — массив существующих ID из Evidence. Не превращай interpretation или unknown в факт. Добавь transition — естественный переход к следующей сцене. История должна отвечать именно на ResearchBrief, а не быть обзором приложения.`,
+    quickRandom
+      ? `Уникальный запуск: ${generationId}. Evidence: ${JSON.stringify(evidenceCatalog)}. Последние структуры, которые нельзя повторять: ${recentStories.slice(-8).join(' || ') || 'нет'}.`
+      : `Сделай ${count}–${Math.min(15, count + 3)} сцен. ResearchBrief: ${JSON.stringify(brief)}\nEvidence: ${JSON.stringify(evidenceCatalog)}\nData: ${JSON.stringify(data)}\nНе повторяй эти прошлые структуры: ${recentStories.slice(-8).join(' || ')}`,
+    { signal, temperature, maxTokens:quickRandom ? 850 : Math.max(1600, count * 320) }
   );
+  if (quickRandom) Object.assign(modelPlan, {
+    audience:brief.audience,
+    situation:`Локальный индекс собрал ${research.evidence.length} проверяемых Evidence; ракурс этого запуска выбран моделью только из них.`,
+    evidence:research.evidence.slice(0, 4).map(item => item.claim),
+    unknowns:research.unknowns,
+    nextStep:brief.expectedDecision
+  });
   const plan = normalizePlan(modelPlan, count);
   if (!plan) throw new Error(`LLM returned fewer than ${count} valid scenes`);
   const byId = new Map(research.evidence.map(item => [item.id, item]));
@@ -492,6 +505,9 @@ async function renderResearchGeneration({ generationId, brief, research, data, s
   plan.evidence = research.evidence.filter(item => item.kind === 'fact').slice(0, 8).map(item => `${item.claim} [${item.id}]`);
   plan.unknowns = [...new Set([...(plan.unknowns || []), ...research.unknowns])];
   plan.motto = String(plan.motto || plan.centralThesis).trim();
+  if (quickRandom) {
+    brief.question = plan.topic; brief.goal = plan.centralThesis; brief.expectedDecision = plan.nextStep; data.title = plan.topic;
+  }
   const temperatureValue = clamp(temperature, 0, 2);
   const styleId = style || (/код|codebase|репозитор|модул/i.test(brief.question) ? 'codebase-to-course' : selectStyle(temperatureValue, generationId));
   const meta = { generationId, mode:'llama.cpp', styleId, temperature:temperatureValue, generationVersion };
