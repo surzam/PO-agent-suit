@@ -5,6 +5,7 @@ import net from 'node:net';
 import { JSDOM } from 'jsdom';
 import { Readability } from '@mozilla/readability';
 import pdf from 'pdf-parse/lib/pdf-parse.js';
+import crypto from 'node:crypto';
 
 const SUPPORTED = /\.(md|markdown|txt|json|csv|tsv|ya?ml|js|mjs|cjs|ts|tsx|jsx|html|css|py|go|rs|java|kt|sql|pdf)$/i;
 const EXCLUDED_DIRS = new Set(['.git', 'node_modules', 'skills', 'tests', 'test', 'scripts', 'public', 'workspace', 'exports', 'graphify-out', '.opencode', '.codex', 'dist', 'build']);
@@ -101,6 +102,7 @@ export function createLocalSource({ roots, maxFiles = 200 } = {}) {
   }
   return {
     id: 'local',
+    describeConfiguration() { return { id:'local', kind:'local', roots:(roots || []).map((root,index)=>({ id:index ? `project-${index + 1}` : 'project', label:index ? path.basename(root) : 'PROJECT', kind:'project' })), sources:added.map(item=>({ sourceId:`local-added:${item.relative}`, sourceKind:'local', safeDisplayName:path.basename(item.relative), contextRootId:'user-added', state:'available' })) }; },
     addDocument({ name, text }) { const relative=`added/${String(name||'context.txt').replace(/[^\p{L}\p{N}._-]/gu,'_').slice(0,96)}`; added.push({file:relative,relative,size:String(text||'').length,text:String(text||'').slice(0,180000)}); },
     async search({ query, limit = 8 }) {
       const needles = terms(query);
@@ -109,6 +111,7 @@ export function createLocalSource({ roots, maxFiles = 200 } = {}) {
         const score = needles.reduce((sum, word) => sum + (haystack.includes(word) ? 1 : 0), 0);
         return { ...item, score };
       }).filter(item => item.score > 0).sort((a, b) => b.score - a.score || a.relative.localeCompare(b.relative)).slice(0, limit).map(item => ({
+        sourceId: item.relative.startsWith('added/') ? `local-added:${item.relative}` : `local:${item.relative}`,
         sourceUri: `local://${item.relative}`,
         sourceTitle: item.relative,
         sourceKind: 'local',
@@ -134,6 +137,7 @@ export function createWebSource({ rateLimitMs = 1000 } = {}) {
   }
   return {
     id: 'web',
+    describeConfiguration() { return { id:'web', kind:'web', roots:[], sources:[] }; },
     async search({ query, limit = 5, signal }) {
       const key = String(query).trim();
       if (cache.has(key)) return cache.get(key);
@@ -153,7 +157,8 @@ export function createWebSource({ rateLimitMs = 1000 } = {}) {
     async fetch(candidate, { signal } = {}) {
       const result = await throttled(candidate.url, { signal });
       const page = cleanPage(result.body, result.url);
-      return { sourceUri: result.url, sourceTitle: page.title || candidate.title, sourceKind: 'web', text: page.text || candidate.snippet };
+      const sourceId = `web:${crypto.createHash('sha256').update(result.url).digest('hex').slice(0,16)}`;
+      return { sourceId, sourceUri: result.url, sourceTitle: page.title || candidate.title, sourceKind: 'web', text: page.text || candidate.snippet };
     }
   };
 }

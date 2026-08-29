@@ -1,54 +1,31 @@
-const FLOW = [
-  ['intent-discovery','DISCOVERY'], ['intent','INTENT'], ['brief','BRIEF'],
-  ['research','RESEARCH'], ['validation','VALIDATION'], ['synthesis','SYNTHESIS'],
-  ['narrative','NARRATIVE'], ['data','DATA'], ['slides','PRESENTATION']
-];
+const FLOW = [['intent-discovery','DISCOVERY'],['intent','INTENT'],['brief','BRIEF'],['research','RESEARCH'],['validation','VALIDATION'],['synthesis','SYNTHESIS'],['narrative','NARRATIVE'],['data','DATA'],['slides','PRESENTATION']];
+const ARTIFACT_STAGE={Intent:'intent',Brief:'brief',EvidenceSet:'research',ValidationReport:'validation',SynthesisPlan:'synthesis',Narrative:'narrative',DataArtifact:'data',Presentation:'slides'};
+const REQUEST_STAGE={IntentDiscoveryRequested:'intent-discovery',BriefRequested:'brief',ResearchRequested:'research',ValidationRequested:'validation',SynthesisRequested:'synthesis',NarrativeRequested:'narrative',DataRequested:'data',PresentationRequested:'slides'};
+function stageFor(event){const value=String(event?.payload?.stage||event?.payload?.harnessId||'').toLowerCase();return FLOW.find(([id])=>value===id||value.includes(id))?.[0]||REQUEST_STAGE[event?.type]||ARTIFACT_STAGE[event?.payload?.type]||null}
+function ordered(events){return events.map((event,index)=>({...event,sequence:Number(event.sequence||index+1)})).sort((a,b)=>a.sequence-b.sequence)}
+function safeDisplay(payload={}){const value=String(payload.displayInput||'');return value&&value.length<=180&&!/[\r\n]/.test(value)?value:null}
+function sourceMeta(value={}){const sourceId=String(value.sourceId||'').slice(0,160);return{sourceId,sourceKind:String(value.sourceKind||'unknown').slice(0,32),safeDisplayName:String(value.safeDisplayName||value.sourceTitle||sourceId||'source').split(/[\\/]/).at(-1).slice(0,160),contextRootId:value.contextRootId||(sourceId.startsWith('local-added:')?'user-added':sourceId.startsWith('local:')?'project':null)}}
 
-const ARTIFACT_STAGE = { Intent:'intent', Brief:'brief', EvidenceSet:'research', ValidationReport:'validation', SynthesisPlan:'synthesis', Narrative:'narrative', DataArtifact:'data', Presentation:'slides' };
-const REQUEST_STAGE = { IntentDiscoveryRequested:'intent-discovery', BriefRequested:'brief', ResearchRequested:'research', ValidationRequested:'validation', SynthesisRequested:'synthesis', NarrativeRequested:'narrative', DataRequested:'data', PresentationRequested:'slides' };
-
-function stageFor(event) {
-  const explicit=String(event?.payload?.stage || event?.payload?.harnessId || '').toLowerCase();
-  const match=FLOW.find(([id])=>explicit===id || explicit.includes(id));
-  return match?.[0] || REQUEST_STAGE[event?.type] || ARTIFACT_STAGE[event?.payload?.type] || null;
-}
-function ordered(events) { return events.map((event,index)=>({...event,sequence:Number(event.sequence || index+1)})).sort((a,b)=>a.sequence-b.sequence); }
-function safeDisplay(payload={}) { const value=String(payload.displayInput || ''); return value && value.length<=180 && !/[\r\n]/.test(value) ? value : null; }
-
-export function projectObservation(run,{capabilities=[]}={}) {
-  const events=ordered(Array.isArray(run?.events)?run.events:[]);
-  const stageState=new Map(FLOW.map(([id])=>[id,'future']));
-  const capabilityState=new Map(capabilities.map(value=>[String(value).toUpperCase(),'idle']));
-  const consoleLines=[]; const artifacts=[]; const reused=[];
-  let activeStage=null; let currentHarness=null; let intent=null; let role={id:run?.role || null,label:run?.role || null};
-  let evidenceCount=0, validationCount=0, validationUnknown=0;
-  for (const event of events) {
-    const payload=event.payload || {}; const stage=stageFor(event);
-    if (event.type==='HarnessStarted' && stage) { if (activeStage && stageState.get(activeStage)==='active') stageState.set(activeStage,'completed'); activeStage=stage; stageState.set(stage,'active'); currentHarness=payload.harnessId || stage; }
-    if (event.type==='HarnessCompleted' && stage) { stageState.set(stage,'completed'); if (activeStage===stage) activeStage=null; }
-    if (event.type==='HarnessFailed' && stage) { stageState.set(stage,'failed'); if (activeStage===stage) activeStage=null; }
-    if (event.type==='IntentDiscovered') intent=payload.question || intent;
-    if (event.type==='RoleContextLoaded') role={id:payload.roleId,label:payload.label || payload.roleId};
-    if (event.type==='ArtifactCreated') { artifacts.push({artifactId:payload.artifactId,type:payload.type,stage:ARTIFACT_STAGE[payload.type]||stage,reused:false,sequence:event.sequence}); }
-    if (event.type==='ArtifactReused') { const value={artifactId:payload.artifactId,type:payload.type,stage:ARTIFACT_STAGE[payload.type]||stage,reused:true,sourceRunId:payload.sourceRunId,sequence:event.sequence}; reused.push(value); artifacts.push(value); if(value.stage)stageState.set(value.stage,'reused'); }
-    if (event.type==='EvidenceCollected') evidenceCount=Number(payload.count || payload.evidenceIds?.length || evidenceCount);
-    if (event.type==='EvidenceValidated') { validationCount=Number(payload.validCount ?? (payload.valid?payload.checked:0) ?? 0); validationUnknown=Number(payload.invalidCount ?? (payload.valid?0:payload.checked) ?? 0); }
-    const capability=String(payload.capability || (event.type.startsWith('Inference')?'MODEL':'')).toUpperCase();
-    if (capability) {
-      if (!capabilityState.has(capability)) capabilityState.set(capability,'idle');
-      if (/Requested$/.test(event.type)) capabilityState.set(capability,'requested');
-      if (/Started$/.test(event.type)) capabilityState.set(capability,'active');
-      if (/Completed$/.test(event.type)) capabilityState.set(capability,'complete');
-      if (/Failed$/.test(event.type)) capabilityState.set(capability,'failed');
-    }
-    consoleLines.push({eventId:event.eventId || event.id,sequence:event.sequence,at:event.at,type:event.type,stage,capability:capability || null,displayInput:safeDisplay(payload),payload});
-  }
-  if (!intent) intent=run?.intent || null;
-  return {
-    runId:run?.id || null,status:run?.status || null,intent,activeStage,currentHarness,role,
-    stages:FLOW.map(([id,label])=>({id,label,state:stageState.get(id),active:activeStage===id})),
-    capabilities:[...capabilityState].map(([id,state])=>({id,state,active:state==='active'})),
-    evidence:{count:evidenceCount,validated:validationCount,unknown:validationUnknown},
-    consoleLines,artifacts,reusedArtifacts:reused,lastSequence:events.at(-1)?.sequence || 0
-  };
+export function projectObservation(run,{capabilities=[],configuration={},artifacts=[]}={}){
+ const events=ordered(Array.isArray(run?.events)?run.events:[]),states=new Map(FLOW.map(([id])=>[id,'future'])),caps=new Map(capabilities.map(value=>[String(value).toUpperCase(),'idle'])),consoleLines=[],artifactView=[],reused=[],sources=new Map(),roots=new Map();
+ let activeStage=null,currentHarness=null,intent=null,role={id:run?.role||null,label:run?.role||null},evidenceCount=0,validationCount=0,validationUnknown=0;
+ for(const root of configuration.roots||[]) roots.set(root.id,{id:root.id,label:root.label||root.id,kind:root.kind||'project',state:'available'});
+ for(const value of configuration.sources||[]){const item=sourceMeta(value);if(item.sourceId)sources.set(item.sourceId,{...item,state:value.state||'available',tracking:'SNAPSHOT',evidenceIds:[]});if(value.contextRootId&&!roots.has(value.contextRootId))roots.set(value.contextRootId,{id:value.contextRootId,label:String(value.contextRootId).replace(/-/g,' ').toUpperCase(),kind:'user-added',state:'available'})}
+ for(const event of events){const payload=event.payload||{},stage=stageFor(event);
+  if(event.type==='HarnessStarted'&&stage){activeStage=stage;states.set(stage,'active');currentHarness=payload.harnessId||stage} if(event.type==='HarnessCompleted'&&stage){states.set(stage,'completed');if(activeStage===stage)activeStage=null} if(event.type==='HarnessFailed'&&stage){states.set(stage,'failed');if(activeStage===stage)activeStage=null}
+  if(event.type==='IntentDiscovered')intent=payload.question||intent; if(event.type==='RoleContextLoaded')role={id:payload.roleId,label:payload.label||payload.roleId};
+  if(event.type==='ArtifactCreated')artifactView.push({artifactId:payload.artifactId,type:payload.type,stage:ARTIFACT_STAGE[payload.type]||stage,reused:false,sequence:event.sequence});
+  if(event.type==='ArtifactReused'){const value={artifactId:payload.artifactId,type:payload.type,stage:ARTIFACT_STAGE[payload.type]||stage,reused:true,sourceRunId:payload.sourceRunId,sequence:event.sequence};reused.push(value);artifactView.push(value);if(value.stage)states.set(value.stage,'reused')}
+  if(event.type==='EvidenceCollected')evidenceCount=Number(payload.count||payload.evidenceIds?.length||evidenceCount); if(event.type==='EvidenceValidated'){validationCount=Number(payload.validCount??(payload.valid?payload.checked:0)??0);validationUnknown=Number(payload.invalidCount??(payload.valid?0:payload.checked)??0)}
+  if(event.type==='SourceOpened'||event.type==='SourceRead'){const item=sourceMeta(payload);if(item.sourceId){const old=sources.get(item.sourceId)||{...item,state:'available',tracking:'LIVE',evidenceIds:[]};sources.set(item.sourceId,{...old,...item,state:event.type==='SourceRead'?'read':'opened',tracking:'LIVE',sequence:event.sequence,capability:payload.capability||null})}}
+  if(event.type==='EvidenceCollected')for(const ref of payload.sources||[]){const item=sourceMeta(ref);if(!item.sourceId)continue;const old=sources.get(item.sourceId)||{...item,state:'available',tracking:'SNAPSHOT',evidenceIds:[]};sources.set(item.sourceId,{...old,...item,state:'used-as-evidence',evidenceIds:[...new Set([...(old.evidenceIds||[]),...(ref.evidenceIds||[])])]})}
+  const capability=String(payload.capability||(event.type.startsWith('Inference')?'MODEL':'')).toUpperCase();if(capability){if(!caps.has(capability))caps.set(capability,'idle');if(/Requested$/.test(event.type))caps.set(capability,'requested');if(/Started$/.test(event.type))caps.set(capability,'active');if(/Completed$/.test(event.type))caps.set(capability,'complete');if(/Failed$/.test(event.type))caps.set(capability,'failed')}
+  consoleLines.push({eventId:event.eventId||event.id,sequence:event.sequence,at:event.at,type:event.type,stage,capability:capability||null,displayInput:safeDisplay(payload),payload});
+ }
+ const byType=new Map(artifacts.map(value=>[value.type,value])),evidenceSet=byType.get('EvidenceSet')?.data,synthesis=byType.get('SynthesisPlan')?.data,evidence=(evidenceSet?.items||[]).map(item=>({id:item.id,claim:item.claim,sourceId:item.sourceId||null,sourceTitle:item.sourceTitle,confidence:item.confidence,kind:item.kind,usedBy:[]})),evidenceById=new Map(evidence.map(item=>[String(item.id),item])),claims=(synthesis?.keyClaims||[]).map(claim=>({id:claim.id,claim:claim.claim,kind:claim.kind,evidenceIds:(claim.evidenceIds||[]).map(String),outputTypes:[]})),claimById=new Map(claims.map(item=>[String(item.id),item]));
+ for(const claim of claims)for(const id of claim.evidenceIds)evidenceById.get(id)?.usedBy.push(claim.id);
+ const outputs=[];for(const item of artifacts){if(!['Narrative','DataArtifact','Presentation'].includes(item.type))continue;const value=item.data||{},claimIds=new Set(),evidenceIds=new Set();for(const row of value.rowProvenance||[])for(const id of row.claimIds||[])claimIds.add(String(id));for(const slide of value.slides||[]){for(const id of slide.claimIds||[])claimIds.add(String(id));for(const id of slide.evidenceIds||[])evidenceIds.add(String(id))}for(const section of value.sections||[])for(const id of section.evidenceIds||[])evidenceIds.add(String(id));for(const id of evidenceIds)for(const claimId of evidenceById.get(id)?.usedBy||[])claimIds.add(String(claimId));outputs.push({artifactId:item.id,type:item.type,reused:Boolean(item.reused),claimIds:[...claimIds],evidenceIds:[...evidenceIds]})}
+ for(const output of outputs)for(const id of output.claimIds)claimById.get(id)?.outputTypes.push(output.type);
+ if(!intent)intent=run?.intent||null;
+ return{runId:run?.id||null,status:run?.status||null,intent,activeStage,currentHarness,role,stages:FLOW.map(([id,label])=>({id,label,state:states.get(id),active:activeStage===id})),capabilities:[...caps].map(([id,state])=>({id,state,active:state==='active'})),contextWorld:{roots:[...roots.values()],sources:[...sources.values()],activeSourceId:[...sources.values()].find(item=>item.tracking==='LIVE'&&['opened','read'].includes(item.state))?.sourceId||null},evidence:{count:evidenceCount,validated:validationCount,unknown:validationUnknown,items:evidence},claims,outputs,artifacts:artifactView,reusedArtifacts:reused,consoleLines,lastSequence:events.at(-1)?.sequence||0};
 }

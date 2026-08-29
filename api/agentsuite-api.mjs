@@ -37,6 +37,15 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
     }
     return null;
   }
+  async function artifactsForRun(run) {
+    return Promise.all((run.artifacts || []).map(async metadata => {
+      try {
+        const owner = metadata.ownerRunId || run.id;
+        const file = metadata.file.split('/').at(-1);
+        return JSON.parse(await fs.readFile(path.join(rootDir, 'runs', owner, 'artifacts', file), 'utf8'));
+      } catch { return null; }
+    })).then(items => items.filter(Boolean));
+  }
   async function inspect(id) { return runtimeFor('brief').inspect(id); }
   function subscribe(runId, listener) {
     if (!subscribers.has(runId)) subscribers.set(runId, new Set());
@@ -76,7 +85,7 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
     const detail = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
     if (req.method === 'GET' && detail) { try { return json(res,await inspect(detail[1])); } catch { return json(res,{error:'Run not found'},404); } }
     const observation = url.pathname.match(/^\/api\/runs\/([^/]+)\/observation$/);
-    if (req.method === 'GET' && observation) { try { return json(res,projectObservation(await inspect(observation[1]),{capabilities:execution.capabilities().map(item=>item.id)})); } catch { return json(res,{error:'Run not found'},404); } }
+    if (req.method === 'GET' && observation) { try { const run=await inspect(observation[1]); return json(res,projectObservation(run,{capabilities:execution.capabilities().map(item=>item.id),configuration:execution.contextConfiguration(),artifacts:await artifactsForRun(run)})); } catch { return json(res,{error:'Run not found'},404); } }
     const artifact = url.pathname.match(/^\/api\/artifacts\/([^/]+)$/);
     if (req.method === 'GET' && artifact) { const value=await artifactById(artifact[1]); return value?json(res,value):json(res,{error:'Artifact not found'},404); }
     if (req.method === 'POST' && url.pathname === '/api/runs') {

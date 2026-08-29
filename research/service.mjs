@@ -4,6 +4,12 @@ const STAGES = ['brief', 'scout', 'planning', 'researching', 'validating', 'synt
 const DEFAULT_LIMITS = { timeoutMs: 10 * 60_000, maxSourceCalls: 24, maxIterationsPerDod: 4, stagnationLimit: 2, maxWebPages: 3 };
 const briefId = () => `brief-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
 const generationId = () => `gen-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+function safeSourceMetadata(source = {}) {
+  const sourceId = String(source.sourceId || '').replace(/[^\p{L}\p{N}:._-]/gu, '').slice(0, 160);
+  const sourceKind = String(source.sourceKind || 'unknown').slice(0, 32);
+  const safeDisplayName = String(source.sourceTitle || source.title || 'source').split(/[\\/]/).at(-1).replace(/[\r\n]/g, ' ').slice(0, 160);
+  return { sourceId: sourceId || `${sourceKind}:unknown`, sourceKind, safeDisplayName };
+}
 
 function cleanBrief(value, origin, transcript) {
   return {
@@ -141,9 +147,16 @@ export function createResearchService({ modelJson, sources = [], render, store, 
           if (source.fetch) {
             for (const candidate of found) {
               if (webPages >= config.maxWebPages || sourceCalls >= config.maxSourceCalls) break;
-              try { const target=String(candidate.title || candidate.url || 'source').slice(0,96); const safeTarget=target.split(/[\\/]/).at(-1).replace(/[^\p{L}\p{N} ._-]/gu,'').slice(0,72)||'source'; await observe(job,'SourceOpened',{capability:source.id.toUpperCase(),target,displayInput:`${source.id}.read("${safeTarget}")`}); documents.push(await source.fetch(candidate, { signal: job.controller.signal })); await observe(job,'SourceRead',{capability:source.id.toUpperCase(),target}); webPages += 1; sourceCalls += 1; stats[source.id] += 1; emit(job, 'researching', `Прочитан источник: ${target}`, { need:need.title, source:source.id, sourceCalls, evidence:evidence.length, sources:activeSources.map(item => item.id) }); } catch (error) { job.sourceFailures=(job.sourceFailures||0)+1; await observe(job,'CapabilityFailed',{capability:source.id.toUpperCase(),operation:'read',code:error.code || 'SOURCE_UNAVAILABLE'}); need.dods[0].limitations.push(`${candidate.url}: ${error.message}`); }
+              try { const target=String(candidate.title || candidate.url || 'source').slice(0,96); const safeTarget=target.split(/[\\/]/).at(-1).replace(/[^\p{L}\p{N} ._-]/gu,'').slice(0,72)||'source'; const meta=safeSourceMetadata({sourceId:candidate.sourceId,sourceKind:source.id,sourceTitle:target}); await observe(job,'SourceOpened',{capability:source.id.toUpperCase(),...meta,target,displayInput:`${source.id}.read("${safeTarget}")`}); const document=await source.fetch(candidate, { signal: job.controller.signal }); documents.push({...document,sourceId:document.sourceId || meta.sourceId}); await observe(job,'SourceRead',{capability:source.id.toUpperCase(),...meta,target}); webPages += 1; sourceCalls += 1; stats[source.id] += 1; emit(job, 'researching', `Прочитан источник: ${target}`, { need:need.title, source:source.id, sourceCalls, evidence:evidence.length, sources:activeSources.map(item => item.id) }); } catch (error) { job.sourceFailures=(job.sourceFailures||0)+1; await observe(job,'CapabilityFailed',{capability:source.id.toUpperCase(),operation:'read',code:error.code || 'SOURCE_UNAVAILABLE'}); need.dods[0].limitations.push(`${candidate.url}: ${error.message}`); }
             }
-          } else documents.push(...found);
+          } else {
+            documents.push(...found);
+            for (const document of found) {
+              const meta=safeSourceMetadata(document);
+              await observe(job,'SourceOpened',{capability:source.id.toUpperCase(),...meta,displayInput:`${source.id}.read("research-context")`});
+              await observe(job,'SourceRead',{capability:source.id.toUpperCase(),...meta});
+            }
+          }
         } catch (error) {
           job.sourceFailures=(job.sourceFailures||0)+1;
           await observe(job,'CapabilityFailed',{capability:source.id.toUpperCase(),operation:'search',code:error.code || 'SOURCE_UNAVAILABLE'});
@@ -155,7 +168,7 @@ export function createResearchService({ modelJson, sources = [], render, store, 
         unknowns.push(message); need.dods.forEach(dod => { dod.status = 'unknown'; dod.limitations.push(message); });
         continue;
       }
-      const sourceList = documents.slice(0, 4).map((doc, index) => ({ ref: `S${index + 1}`, sourceUri: doc.sourceUri, sourceTitle: doc.sourceTitle, sourceKind: doc.sourceKind, text: doc.text.slice(0, 4000) }));
+      const sourceList = documents.slice(0, 4).map((doc, index) => ({ ref: `S${index + 1}`, sourceId:doc.sourceId || `${doc.sourceKind || 'source'}:${index + 1}`, sourceUri: doc.sourceUri, sourceTitle: doc.sourceTitle, sourceKind: doc.sourceKind, text: doc.text.slice(0, 4000) }));
       emit(job, 'researching', `Извлекаю Evidence из ${sourceList.length} источников`, { sourceCalls, evidence:evidence.length, sources:activeSources.map(source => source.id), capability:'MODEL' });
       await observe(job,'InferenceRequested',{capability:'MODEL',purpose:'evidence-extraction',displayInput:'model.infer("evidence-extraction")'});
       await observe(job,'InferenceStarted',{capability:'MODEL',purpose:'evidence-extraction',displayInput:'model.infer("evidence-extraction")'});
@@ -171,7 +184,7 @@ export function createResearchService({ modelJson, sources = [], render, store, 
         const source = sourceList.find(candidate => candidate.ref === item.sourceRef);
         if (!source || !String(item.claim || '').trim()) continue;
         const id = `E${String(evidence.length + 1).padStart(3, '0')}`;
-        evidence.push({ id, claim: String(item.claim).trim(), quote: String(item.quote || '').trim(), sourceUri: source.sourceUri, sourceTitle: source.sourceTitle, sourceKind: source.sourceKind, retrievedAt: new Date().toISOString(), confidence: ['direct', 'corroborated', 'inferred', 'conflicted'].includes(item.confidence) ? item.confidence : 'inferred', kind: ['fact', 'interpretation', 'unknown'].includes(item.kind) ? item.kind : 'fact' });
+        evidence.push({ id, claim: String(item.claim).trim(), quote: String(item.quote || '').trim(), sourceId:source.sourceId, sourceUri: source.sourceUri, sourceTitle: source.sourceTitle, sourceKind: source.sourceKind, retrievedAt: new Date().toISOString(), confidence: ['direct', 'corroborated', 'inferred', 'conflicted'].includes(item.confidence) ? item.confidence : 'inferred', kind: ['fact', 'interpretation', 'unknown'].includes(item.kind) ? item.kind : 'fact' });
         need.dods.forEach(dod => { dod.evidenceIds.push(id); dod.findings.push(String(item.claim).trim()); });
       }
       // Some local models answer the extraction request with an empty array
@@ -183,7 +196,7 @@ export function createResearchService({ modelJson, sources = [], render, store, 
           const claim = describeLocalDocument({ sourceTitle: source.sourceTitle, text: source.text });
           if (!claim) continue;
           const id = `E${String(evidence.length + 1).padStart(3, '0')}`;
-          evidence.push({ id, claim, quote: source.text.slice(0, 260), sourceUri: source.sourceUri, sourceTitle: source.sourceTitle, sourceKind: source.sourceKind, retrievedAt: new Date().toISOString(), confidence: 'direct', kind: 'fact' });
+          evidence.push({ id, claim, quote: source.text.slice(0, 260), sourceId:source.sourceId, sourceUri: source.sourceUri, sourceTitle: source.sourceTitle, sourceKind: source.sourceKind, retrievedAt: new Date().toISOString(), confidence: 'direct', kind: 'fact' });
           need.dods.forEach(dod => { dod.evidenceIds.push(id); dod.findings.push(claim); });
         }
       }
@@ -245,10 +258,13 @@ export function createResearchService({ modelJson, sources = [], render, store, 
       sourceCalls += 1; sourceStats[source.id] = (sourceStats[source.id] || 0) + 1;
       emit(job, 'researching', `${source.id}: найдено ${documents.length}`, { source:source.id, found:documents.length, sources:localSources.map(item => item.id), evidence:evidence.length, sourceCalls, capability:source.id.toUpperCase() });
       for (const document of documents) {
+        const meta=safeSourceMetadata(document);
+        await observe(job,'SourceOpened',{capability:source.id.toUpperCase(),...meta,displayInput:`${source.id}.read("research-context")`});
+        await observe(job,'SourceRead',{capability:source.id.toUpperCase(),...meta});
         const quote = describeLocalDocument(document); if (!quote) continue;
         const id = `E${String(evidence.length + 1).padStart(3, '0')}`;
         const claim = quote;
-        evidence.push({ id, claim, quote, sourceUri:document.sourceUri, sourceTitle:document.sourceTitle, sourceKind:document.sourceKind, retrievedAt:new Date().toISOString(), confidence:'direct', kind:'fact' });
+        evidence.push({ id, claim, quote, sourceId:document.sourceId || `${document.sourceKind || 'source'}:${document.sourceTitle}`, sourceUri:document.sourceUri, sourceTitle:document.sourceTitle, sourceKind:document.sourceKind, retrievedAt:new Date().toISOString(), confidence:'direct', kind:'fact' });
         if (evidence.length >= 6) break;
       }
       if (evidence.length >= 6) break;

@@ -60,6 +60,10 @@ export async function createSuiteExecution({ rootDir, eventSink = null }) {
     setup,
     briefTurn: input => researchService.briefTurn(input),
     addContext: input => researchService.addContext(input),
+    contextConfiguration: () => ({
+      roots: researchSources.flatMap(source => source.describeConfiguration?.()?.roots || []),
+      sources: researchSources.flatMap(source => source.describeConfiguration?.()?.sources || [])
+    }),
     capabilities: () => [
       ...researchSources.map(source => ({ id:source.id.toUpperCase(), label:source.id === 'local' ? 'Local files' : 'Web research' })),
       { id:'MODEL', label:'Local model' }

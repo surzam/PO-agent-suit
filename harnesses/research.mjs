@@ -39,7 +39,7 @@ export function createResearchHarness({ researchService, artifactStore }) {
           metadata: { legacyGenerationId: started.generationId, conflicts: research.conflicts || [], unknowns: research.unknowns || [], needs: research.needs || [], sourceStats: research.sourceStats || {}, sourceCalls: research.sourceCalls || [] }
         } }],
         events: [
-          { type: 'EvidenceCollected', payload: { count: evidence.length, evidenceIds:evidence.map(item=>item.id), sourceCount:new Set(evidence.map(item=>item.sourceUri)).size } },
+          { type: 'EvidenceCollected', payload: { count: evidence.length, evidenceIds:evidence.map(item=>item.id), sourceCount:new Set(evidence.map(item=>item.sourceUri)).size, sources:[...new Map(evidence.map(item=>[item.sourceId || item.sourceUri,{ sourceId:item.sourceId || item.sourceUri, sourceKind:item.sourceKind, safeDisplayName:item.sourceTitle, evidenceIds:[item.id] }])).values()] } },
           { type: 'ResearchCompleted', payload: { legacyGenerationId: started.generationId } }
         ]
       };
