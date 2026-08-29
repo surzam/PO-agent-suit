@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=PO Agent Suite · Workstation Computer
-Comment=R&D narrative presentation workstation
+Name=PO Agent Suite
+Comment=R&D narrative presentation app
 Exec=/media/surzam/DATA/prez/launch.sh
 Icon=/media/surzam/DATA/prez/assets/icons/rnd-icon.png
 Terminal=false

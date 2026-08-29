@@ -54,7 +54,7 @@ export function createArtifactStore(exportDir) {
     for (const generationId of Array.isArray(ids) ? ids : []) {
       const manifest = await fs.readFile(path.join(exportDir, generationId, ARTIFACT_FILES.manifest), 'utf8').then(JSON.parse).catch(() => null);
       if (manifest?.generationId) {
-        if (!['complete', 'failed', 'cancelled'].includes(manifest.state)) {
+        if (!['complete', 'failed', 'cancelled', 'needs-context'].includes(manifest.state)) {
           manifest.state = 'failed'; manifest.error = 'Application restarted before research completed'; manifest.updatedAt = new Date().toISOString();
           await atomicWrite(path.join(exportDir, generationId, ARTIFACT_FILES.manifest), JSON.stringify(manifest, null, 2));
         }

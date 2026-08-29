@@ -19,7 +19,7 @@ const plan = {
 const data = { rows:[], numericMetrics:[['time_to_insight',12,'minutes','demo'],['steps_removed',7,'steps','demo']] };
 const themes = new Set(), families = new Set();
 const chartClass = { editorial:'data-lollipop', arcade:'data-pixels', brutal:'data-blocks', playful:'data-bubbles', diagrammatic:'data-line', cinematic:'data-orbit' };
-const workstation = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+const appHtml = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 
 for (const slug of slugs) {
   const html = slidesHtml(plan, { styleId:slug, generationId:`audit-${slug}` }, data);
@@ -42,14 +42,14 @@ for (const slug of slugs) {
 assert.equal(slugs.length, 35, 'full template library');
 assert.equal(themes.size, slugs.length, 'every template has a unique theme token set');
 assert.equal(families.size, 6, 'six structurally distinct design families');
-for (const family of families) assert.ok(workstation.includes(`data-family="${family}"`), `workstation mirrors ${family} family`);
-assert.ok(workstation.includes('applyStyle(x.visualTheme)'), 'workstation consumes exact generated theme');
-assert.ok(workstation.includes('Research sequence') && workstation.includes('LIVE JOB'), 'workstation includes research observation console');
-assert.ok(!workstation.includes('xterm'), 'observation console does not expose an embedded terminal');
-assert.ok(!workstation.includes('const palettes='), 'legacy menu-only palette generator removed');
+for (const family of families) assert.ok(appHtml.includes(`data-family="${family}"`), `app mirrors ${family} family`);
+assert.ok(appHtml.includes('applyStyle(x.visualTheme)'), 'app consumes exact generated theme');
+assert.ok(appHtml.includes('Research sequence') && appHtml.includes('LIVE JOB'), 'app includes research observation console');
+assert.ok(!appHtml.includes('xterm'), 'observation console does not expose an embedded terminal');
+assert.ok(!appHtml.includes('const palettes='), 'legacy menu-only palette generator removed');
 assert.equal(mottoSimilarity('Код становится понятным', 'Код становится понятным'), 1, 'exact motto repetition is detected');
 assert.equal(mottoSimilarity('Код становится понятным', 'Решение начинается с проверяемого ограничения'), 0, 'distinct mottos remain distinct');
-const inlineScript = workstation.match(/<script>([\s\S]*)<\/script>/)?.[1];
-assert.ok(inlineScript, 'workstation inline script exists');
-assert.doesNotThrow(() => new Function(inlineScript), 'workstation inline script compiles');
+const inlineScript = appHtml.match(/<script>([\s\S]*)<\/script>/)?.[1];
+assert.ok(inlineScript, 'app inline script exists');
+assert.doesNotThrow(() => new Function(inlineScript), 'app inline script compiles');
 console.log(`slides audit: ${slugs.length} templates · ${themes.size} unique themes · ${families.size} shared UI/deck families · 6 scene renderers · 6 family-specific data visuals · PASS`);

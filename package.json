@@ -1,7 +1,7 @@
 {
   "name": "po-agent-suite",
   "version": "0.1.0",
-  "description": "PO Agent Suite · Workstation Computer with local deep research, evidence-backed narratives, and animated slides",
+  "description": "PO Agent Suite with local deep research, evidence-backed narratives, and animated slides",
   "homepage": "https://github.com/surzam/PO-agent-suit",
   "author": {
     "name": "surzam",
@@ -10,6 +10,9 @@
   "private": true,
   "type": "module",
   "main": "electron/main.mjs",
+  "bin": {
+    "suite": "cli/suite.mjs"
+  },
   "scripts": {
     "dev": "node server.mjs",
     "start": "node server.mjs",
@@ -17,6 +20,10 @@
     "test:slides": "node scripts/slides-audit.mjs",
     "test:research": "node scripts/research-audit.mjs",
     "test:api": "node scripts/api-audit.mjs",
+    "test:runtime": "node scripts/runtime-audit.mjs",
+    "test:rerun": "node scripts/rerun-audit.mjs",
+    "test:role": "node scripts/role-audit.mjs",
+    "test:observation": "node scripts/observation-audit.mjs",
     "app": "electron --no-sandbox electron/main.mjs",
     "launch": "bash launch.sh",
     "package": "electron-builder --linux AppImage",
@@ -28,9 +35,15 @@
   },
   "build": {
     "appId": "local.poagent.suite",
-    "productName": "PO Agent Suite · Workstation Computer",
+    "productName": "PO Agent Suite",
     "files": [
       "electron/**/*",
+      "core/**/*",
+      "cli/**/*",
+      "harnesses/**/*",
+      "app/**/*",
+      "api/**/*",
+      "roles/**/*",
       "public/**/*",
       "server.mjs",
       "research/**/*",

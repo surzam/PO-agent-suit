@@ -21,21 +21,22 @@ ipcMain.on('close-window', event => BrowserWindow.fromWebContents(event.sender)?
 
 function startServer() {
   return new Promise((resolve, reject) => {
-    serverProcess = spawn(process.execPath, [path.join(root, 'server.mjs')], {
-      cwd: root,
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', PORT: '0' },
+    const runtimeRoot = path.join(app.getPath('userData'), 'workspace');
+    serverProcess = spawn(process.execPath, [path.join(root, 'cli', 'suite.mjs'), 'serve', '--host', '127.0.0.1', '--port', '0'], {
+      cwd: app.isPackaged ? process.resourcesPath : root,
+      env: { ...process.env, ELECTRON_RUN_AS_NODE:'1', PORT:'0', PO_RUNTIME_ROOT:runtimeRoot, PO_WORKSPACE_DIR:runtimeRoot, PO_EXPORT_DIR:path.join(runtimeRoot,'exports') },
       stdio: ['ignore', 'pipe', 'pipe']
     });
     let output = '';
     const onData = chunk => {
       output += chunk.toString();
-      const match = output.match(/http:\/\/localhost:(\d+)/);
+      const match = output.match(/http:\/\/127\.0\.0\.1:(\d+)/);
       if (match) resolve(Number(match[1]));
     };
     serverProcess.stdout.on('data', onData);
     serverProcess.stderr.on('data', chunk => { output += chunk.toString(); });
     serverProcess.once('error', reject);
-    serverProcess.once('exit', code => { if (code && !output.match(/localhost:\d+/)) reject(new Error(`Server exited: ${code}`)); });
+    serverProcess.once('exit', code => { if (code && !output.match(/127\.0\.0\.1:\d+/)) reject(new Error(`Server exited: ${code}`)); });
   });
 }
 
@@ -48,13 +49,13 @@ async function createWindow() {
     frame: false,
     autoHideMenuBar: true,
     backgroundColor: '#071321',
-    title: 'PO Agent Suite · Workstation Computer',
+    title: 'PO Agent Suite',
     icon: appIcon,
     webPreferences: { preload: path.join(here, 'preload.mjs'), contextIsolation: true, nodeIntegration: false }
   });
   win.setIcon(appIcon);
-  win.webContents.setWindowOpenHandler(({ url }) => { if (url.startsWith(`http://localhost:${port}/api/artifact/`)) { shell.openExternal(url); return { action: 'deny' }; } shell.openExternal(url); return { action: 'deny' }; });
-  await win.loadURL(`http://localhost:${port}/`);
+  win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
+  await win.loadURL(`http://127.0.0.1:${port}/`);
 }
 
 app.whenReady().then(createWindow).catch(error => { console.error(error); app.quit(); });

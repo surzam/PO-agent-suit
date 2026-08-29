@@ -91,7 +91,7 @@ async function walk(dir, root, out, limit) {
 }
 
 export function createLocalSource({ roots, maxFiles = 200 } = {}) {
-  let indexed;
+  let indexed; const added=[];
   async function index() {
     if (indexed) return indexed;
     const files = [];
@@ -101,9 +101,10 @@ export function createLocalSource({ roots, maxFiles = 200 } = {}) {
   }
   return {
     id: 'local',
+    addDocument({ name, text }) { const relative=`added/${String(name||'context.txt').replace(/[^\p{L}\p{N}._-]/gu,'_').slice(0,96)}`; added.push({file:relative,relative,size:String(text||'').length,text:String(text||'').slice(0,180000)}); },
     async search({ query, limit = 8 }) {
       const needles = terms(query);
-      return (await index()).map(item => {
+      return ([...await index(),...added]).map(item => {
         const haystack = `${item.relative}\n${item.text}`.toLowerCase();
         const score = needles.reduce((sum, word) => sum + (haystack.includes(word) ? 1 : 0), 0);
         return { ...item, score };

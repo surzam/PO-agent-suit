@@ -6,7 +6,7 @@ import pptxgen from 'pptxgenjs';
 import YAML from 'yaml';
 import { createArtifactStore } from './research/storage.mjs';
 import { createLocalSource, createWebSource } from './research/sources.mjs';
-import { createResearchService } from './research/service.mjs';
+import { createResearchService, dataFromEvidence } from './research/service.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, 'public');
@@ -34,7 +34,7 @@ const clamp = (n, min, max) => Math.max(min, Math.min(max, Number(n)));
 const idOf = () => `gen-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 const productFixture = {
-  title: 'PO Agent Suite · Workstation Computer', sourceKind: 'product-fixture', sources: ['fixture://po-agent-suite-product', 'fixture://po-agent-suite-product-lore'],
+  title: 'PO Agent Suite', sourceKind: 'product-fixture', sources: ['fixture://po-agent-suite-product', 'fixture://po-agent-suite-product-lore'],
   columns: ['Слой продукта', 'Проверяемый факт', 'Зачем это PO'],
   rows: [
     ['Chat-first UI', 'public/index.html принимает вопрос, файлы и Temperature', 'Начать с ситуации, а не с меню'],
@@ -49,7 +49,7 @@ const productFixture = {
     ['Visual system', 'editorial, professional, kinetic и diagrammatic меняют композицию', 'Подобрать форму под аудиторию'],
     ['Generation API', 'каждый запуск получает новый generationId и три URL', 'Не открыть устаревший Blob'],
     ['Quality fixture', 'CSV содержит time_to_insight, artifacts_per_request, manual_steps_removed', 'Проверять эффект числами, когда они есть']
-    ,['Workstation computer', 'Electron поднимает собственный сервер и открывает артефакты отдельно', 'Запускать Suite как отдельный рабочий инструмент'],
+    ,['Локальное приложение', 'Electron поднимает собственный сервер и открывает артефакты отдельно', 'Запускать Suite как отдельный рабочий инструмент'],
     ['Живая ситуация PO', 'На демо команда спорит не о кнопке, а о том, какой риск принять сегодня', 'Перевести разговор из мнений в действие'],
     ['Универсальный AI-инструмент', 'Чат с LLM-агентом превращает естественный запрос в таблицу, текст и презентацию', 'Дать PO и руководителю единый поток от хаоса к решению'],
     ['Источники данных', 'Jira, Trello, GitHub/GitLab, Analytics, CRM, базы, CSV и Excel входят в продуктовый замысел', 'Собирать доказательства рядом с выводом'],
@@ -78,7 +78,7 @@ const productFixture = {
     'Боли, которые продукт должен превращать в действие: ручной отчёт по Jira, повторная презентация квартала, непонятный legacy-код и хаотичные требования.',
     'Поддерживаемая идея архитектуры: пользователь → чат → LLM-агент → планировщик → инструменты → рендер артефактов.',
     'Продуктовый лор не разрешает выдавать выдуманные демо-цифры за production-измерения и не включает Indexator в Suite.'
-    ,'Workstation computer запускает Suite отдельно от браузерного проекта и держит свой generation context.'
+    ,'Локальное приложение запускает Suite отдельно от браузерного проекта и держит свой generation context.'
   ],
   codeSignals: [
     'server.mjs: buildData → llama → normalizePlan → renderers',
@@ -126,7 +126,7 @@ function generatedFixture(seed) {
   const insights=Array.from({length:8},(_,i)=>`${pick(generatedPools.proofs,i)} связывает ${pick(generatedPools.mechanisms,i+1)} и помогает ${pick(generatedPools.outcomes,i+3)}.`);
   insights.push(`Сгенерированный demo-срез использует ${metrics[0]} минут, ${metrics[1]} ручных шагов и вариант ${metrics[2]}; это пример для разговора, не измерение production.`);
   insights.push(`Человеческая сцена этого запуска: ${generatedPools.humanMoments[(Math.abs(seed)+3)%generatedPools.humanMoments.length]}. Она превращает технический сигнал в повод для решения.`);
-  return { title:`PO Agent Suite · Workstation Computer · generated example ${Math.abs(seed)%1000000}`, rows, insights, numericMetrics, sourceKind:'product-fixture', sources:[`fixture://po-agent-suite-product/example-${Math.abs(seed)}`], codeSignals:[`generated fixture seed: ${Math.abs(seed)}`,...productFixture.codeSignals] };
+  return { title:`PO Agent Suite · generated example ${Math.abs(seed)%1000000}`, rows, insights, numericMetrics, sourceKind:'product-fixture', sources:[`fixture://po-agent-suite-product/example-${Math.abs(seed)}`], codeSignals:[`generated fixture seed: ${Math.abs(seed)}`,...productFixture.codeSignals] };
 }
 
 const ignoredDirs = new Set(['node_modules','.git','.cache','dist','build','skills','.opencode']);
@@ -145,7 +145,7 @@ async function discoverSources(dir, out = []) {
 
 function promptTitle(prompt) {
   const clean = String(prompt || '').replace(/^\s*(покажи|создай|подготовь|сделай|проанализируй|расскажи|сравни|спроси)\s*/i, '').replace(/^\s*,\s*/, '').trim();
-  return `${(clean || 'PO Agent Suite').slice(0, 78)} · Workstation Computer`;
+  return `${(clean || 'PO Agent Suite').slice(0, 78)}`;
 }
 
 async function buildData(input) {
@@ -187,7 +187,7 @@ const selfPrompts = [
   'Преврати код Suite в интерактивный курс: покажи путь пользователя от кнопки до артефакта'
 ];
 const fallbackSets = [
-  { key:'code', match:/код|codebase|course|файл|модул/i, thesis:'Код становится понятным, когда путь пользователя связывает файл, действие и наблюдаемый результат.', scenes:['Кнопка — начало маршрута','Запрос попадает в серверный вход','Context Analyzer выбирает разрешённый контекст','Data превращает файлы в проверяемые строки','StoryPlan объясняет порядок событий','Narrative переводит код на язык решения','Slides показывают связи между модулями','GenerationId удерживает маршрут целиком','Fallback сохраняет курс без модели','Workstation computer держит среду рядом','Квиз проверяет понимание действия','Следующий маршрут начинается с вопроса'] },
+  { key:'code', match:/код|codebase|course|файл|модул/i, thesis:'Код становится понятным, когда путь пользователя связывает файл, действие и наблюдаемый результат.', scenes:['Кнопка — начало маршрута','Запрос попадает в серверный вход','Context Analyzer выбирает разрешённый контекст','Data превращает файлы в проверяемые строки','StoryPlan объясняет порядок событий','Narrative переводит код на язык решения','Slides показывают связи между модулями','GenerationId удерживает маршрут целиком','Fallback сохраняет курс без модели','Локальное приложение держит среду рядом','Квиз проверяет понимание действия','Следующий маршрут начинается с вопроса'] },
   { key:'architecture', match:/архитект|как устро|связк/i, thesis:'Архитектура Suite превращает один вопрос в проверяемую цепочку артефактов.', scenes:['Вопрос запускает pipeline','Analyzer отделяет сигнал от шума','StoryPlan фиксирует одну линию рассказа','Data показывает опору для решения','Narrative объясняет последствия','Slides делают тезис видимым','GenerationId связывает три результата','Локальный fallback сохраняет честность','Health показывает актуальный сервер','Pipeline готов к следующему вопросу','Кодовая граница защищает контекст','Следующий шаг проверяет гипотезу'] },
   { key:'value', match:/польз|ценност|преимущ|product owner|po\b/i, thesis:'PO получает время на решение, потому что Suite собирает контекст и коммуникацию в один поток.', scenes:['Ценность начинается с ситуации PO','Контекст не должен становиться ручной сборкой','Analyzer находит главный сигнал','Факты остаются проверяемыми','Narrative переводит факт в последствие','Слайды держат разговор','Один generationId убирает ручную сверку','Данные показывают место для экономии времени','Ограничения делают обещание честным','Риск получает владельца','Результат можно открыть сразу','Следующий шаг возвращает контроль PO'] },
   { key:'team', match:/команд|людей|сотрудник|совмест/i, thesis:'Команда быстрее согласует действие, когда факты, смысл и визуальный рассказ связаны.', scenes:['У команды один вопрос, но разные роли','Общий контекст снижает повторные объяснения','Факты становятся точкой встречи','Неизвестность видна до решения','Narrative выравнивает язык','Slides помогают провести разговор','Data остаётся общей точкой проверки','Артефакты не расходятся по версиям','Ограничения не прячутся за дизайном','Следующее действие получает контекст','Каждая роль видит свой результат','Команда проверяет эффект'] },
@@ -453,7 +453,7 @@ addEventListener('resize',scale);addEventListener('keydown',event=>{if(['ArrowRi
 </script></body></html>`;
 }
 async function legacyPptx(plan, meta, data) {
-  const pptx = new pptxgen(); pptx.layout = 'LAYOUT_WIDE'; pptx.author = 'PO Agent Suite · Workstation Computer'; pptx.subject = 'Legacy static export'; pptx.title = plan.topic;
+  const pptx = new pptxgen(); pptx.layout = 'LAYOUT_WIDE'; pptx.author = 'PO Agent Suite'; pptx.subject = 'Legacy static export'; pptx.title = plan.topic;
   const themes = { editorial:{bg:'F3EEE4',ink:'18212B',accent:'1D5C45',hot:'D77A5B'}, professional:{bg:'071321',ink:'F7FBFF',accent:'4F7CFF',hot:'FF805D'}, kinetic:{bg:'21133D',ink:'FFF9EF',accent:'F0DC4D',hot:'FF6D8B'}, diagrammatic:{bg:'EEF3F7',ink:'14263A',accent:'1E65D6',hot:'F07B4F'}, 'codebase-to-course':{bg:'241B16',ink:'FFF6E8',accent:'FFB86B',hot:'F06F52'} };
   const t = themes[meta.styleId] || themes.professional;
   const metrics = metricRows(data || {}), max = Math.max(...metrics.map(([, value]) => Number(value) || 0), 1), chartIndexes=chartSceneIndexes(plan.scenes,metrics.length>0);
@@ -532,7 +532,7 @@ const artifactStore = createArtifactStore(exportDir);
 await artifactStore.initialize();
 const realRoot = await fs.realpath(root);
 const configuredRoots = (await Promise.all((appConfig.research?.local?.allowed_paths || ['.']).map(async value => fs.realpath(path.resolve(root, value)).catch(() => null)))).filter(value => value && (value === realRoot || value.startsWith(`${realRoot}${path.sep}`)));
-const researchSources = [createLocalSource({ roots:configuredRoots, maxFiles:Number(appConfig.research?.local?.max_files || 200) })];
+export const researchSources = [createLocalSource({ roots:configuredRoots, maxFiles:Number(appConfig.research?.local?.max_files || 200) })];
 if (process.env.PO_RESEARCH_WEB !== '0' && appConfig.research?.web?.enabled !== false) researchSources.push(createWebSource({ rateLimitMs:Number(appConfig.research?.web?.rate_limit_ms || 1000) }));
 const researchService = createResearchService({
   modelJson, sources:researchSources, render:renderResearchGeneration, store:artifactStore,
@@ -557,7 +557,7 @@ async function handle(req,res){
   const events=url.pathname.match(/^\/api\/generations\/([^/]+)\/events$/);
   if(events&&req.method==='GET'){
     res.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','cache-control':'no-cache','connection':'keep-alive'});
-    const write=event=>{res.write(`event: progress\ndata: ${JSON.stringify(event)}\n\n`);if(['complete','failed','cancelled'].includes(event.stage))res.end()};
+    const write=event=>{res.write(`event: progress\ndata: ${JSON.stringify(event)}\n\n`);if(['complete','failed','cancelled','needs-context'].includes(event.stage))res.end()};
     const unsubscribe=researchService.subscribe(events[1],write);
     if(!unsubscribe)return res.end(`event: error\ndata: ${JSON.stringify({error:'generation not found'})}\n\n`);
     const heartbeat=setInterval(()=>res.write(': heartbeat\n\n'),15000);
@@ -577,4 +577,4 @@ async function handle(req,res){
 }
 const server=http.createServer((req,res)=>handle(req,res).catch(e=>{console.error('[api error]',e);sendJson(res,{error:e.message},500)}));
 if (process.env.PO_AGENT_NO_LISTEN !== '1') server.listen(port,()=>console.log(`PO Agent Suite ${generationVersion}: http://localhost:${server.address().port}`));
-export { slidesHtml, designFamily, templateTheme, templateVisualTheme, metricRows, mottoSimilarity, modelJson, renderResearchGeneration, researchService, artifactStore };
+export { slidesHtml, designFamily, templateTheme, templateVisualTheme, metricRows, mottoSimilarity, modelJson, narrativeMarkdown, renderResearchGeneration, researchService, artifactStore, dataFromEvidence };

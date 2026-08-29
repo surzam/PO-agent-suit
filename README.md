@@ -1,6 +1,86 @@
-# PO Agent Suite · Workstation Computer
+# PO Agent Suite
 
-Открытое Electron-приложение для Product Owner: чат формирует исследовательский заказ, локальный и интернет-поиск собирают Evidence, после чего один pipeline создаёт связанные **Data**, **Narrative**, **Slides** и legacy **PPTX**.
+PO Agent Suite — первая distribution AgentSuite: локального, модульного runtime для композиции ролевых AI-harness'ов. Сейчас в ней уже есть Product Owner workflow: чат формирует исследовательский заказ, локальный и интернет-поиск собирают Evidence, после чего один pipeline создаёт связанные **Data**, **Narrative**, **Slides** и legacy **PPTX**.
+
+## AgentSuite runtime slice
+
+Runtime не зависит от браузера и Electron. Минимальный headless-срез доступен через CLI:
+
+```bash
+node cli/suite.mjs run \
+  --role product-owner \
+  --workflow executive-review \
+  "Почему команда не выполняет план?"
+```
+
+Он создаёт persistent `Run`, записывает фактические `Event` в `events.jsonl` и сохраняет `Brief` как `Artifact`:
+
+```bash
+node cli/suite.mjs inspect <run-id>
+```
+
+Это первый вертикальный срез новой модели `Run → Event → Harness → Artifact`. Research и Validation теперь проходят через общий Harness Registry и generic dispatch; `Indexator` остаётся отдельным продуктом.
+
+Для исследовательского запуска:
+
+```bash
+node cli/suite.mjs run \
+  --role product-owner \
+  --workflow research-validated \
+  "Почему команда не выполняет план?"
+```
+
+Для построения общего семантического плана после Research и Validation:
+
+```bash
+node cli/suite.mjs run \
+  --role product-owner \
+  --workflow research-synthesis \
+  "Почему команда не выполняет план?"
+```
+
+Результат включает `Brief`, `EvidenceSet`, `ValidationReport` и `SynthesisPlan`. Последний содержит key claims, ссылки на Evidence ID, неизвестности и будущие requested outputs; Data/Narrative/Slides пока не запускаются.
+
+Narrative consumer:
+
+```bash
+node cli/suite.mjs run \
+  --role product-owner \
+  --workflow research-narrative \
+  "Почему команда не выполняет план?"
+```
+
+Этот workflow добавляет immutable `Narrative`, созданный существующей narrative implementation из `SynthesisPlan`. Новый synthesis для Narrative не выполняется.
+
+Для первого semantic fan-out:
+
+```bash
+node cli/suite.mjs run \
+  --role product-owner \
+  --workflow research-analysis \
+  "Почему команда не выполняет план?"
+```
+
+`Narrative` и `DataArtifact` создаются как независимые sibling outputs одного `SynthesisPlan`. Data сохраняет `rowProvenance` с Claim ID и Evidence ID; Data не извлекается из Narrative.
+
+Для полного R9-пути с презентацией:
+
+```bash
+node cli/suite.mjs run \
+  --role product-owner \
+  --workflow research-presentation \
+  "Почему команда не выполняет план?"
+```
+
+`Presentation` — sibling renderer от `SynthesisPlan` и `DataArtifact`: legacy `slidesHtml` переиспользуется через Slides Harness, а `Narrative` не объявляется ложной зависимостью. `suite inspect` показывает фактическую lineage через `sourceArtifactIds`.
+
+Повторный downstream-запуск выполняется как новый Run с явным reuse:
+
+```bash
+suite rerun <run-id> --from slides
+```
+
+Он переиспользует необходимые `SynthesisPlan` и `DataArtifact` по исходным ID, создаёт новую `Presentation`, записывает `parentRunId` и `ArtifactReused`, а исходный Run не изменяет.
 
 ## Запуск — одна команда
 
@@ -90,6 +170,8 @@ workspace/exports/<generationId>/
 └── manifest.json
 ```
 
+Headless runtime runs хранятся отдельно в `workspace/runs/<run-id>/` и не смешиваются с legacy export-папками.
+
 Запись атомарная. `workspace/exports/index.json` позволяет восстановить artifact routes после перезапуска. Старые плоские exports не удаляются и не перезаписываются.
 
 ## API
@@ -117,5 +199,15 @@ npm run package:deb  # Debian package, опционально
 ```
 
 `test:research` работает на mock-модели и mock-источнике: production-код не содержит fixture-fallback. `test:slides` проверяет все 35 тем, 16:9, scene renderers и лимит графиков не чаще одного на пять слайдов.
+
+Role fork использует тот же EvidenceSet и ValidationReport, но строит новый worldview-dependent SynthesisPlan:
+
+```bash
+suite rerun <run-id> --role cto --from synthesis
+```
+
+`product-owner` и `cto` зарегистрированы в `roles/registry.mjs`. Research и Validation повторно не запускаются; downstream artifacts создаются от нового SynthesisPlan.
+
+`suite serve` предпочитает порт `8080`. Если его уже занимает локальный `llama-server`, сервис автоматически переходит на `8081` и печатает фактический URL.
 
 Настройки находятся в `po-agent.config.yaml`. PO-инструкции — в `skills/po-worldview.md`, `skills/po-synthesis.md`, `skills/po-communication.md`; quality gate — в `skills/quality.md`. Backlog indexing остаётся отдельному продукту Indexator.

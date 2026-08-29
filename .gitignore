@@ -3,6 +3,7 @@ dist/
 workspace/exports/
 workspace/*.html
 workspace/variation-history.json
+workspace/runs/
 graphify-out/
 template-library/codebase-to-course/.git/
 .DS_Store
