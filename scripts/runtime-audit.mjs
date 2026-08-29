@@ -58,9 +58,9 @@ try {
   registry.register(createNarrativeHarness({ narrativeMarkdown }));
   registry.register(createDataHarness({ dataFromEvidence }));
   registry.register(createSlidesHarness({ slidesHtml }));
-  const researchRun = await runtime.run({ intent:'Проверить research boundary', role:'product-owner', workflow:'research-presentation', stages:[{ harnessId:'brief' },{ harnessId:'research', requestEvent:'ResearchRequested' },{ harnessId:'validation', requestEvent:'ValidationRequested' },{ harnessId:'synthesis', requestEvent:'SynthesisRequested' },{ harnessId:'narrative', requestEvent:'NarrativeRequested' },{ harnessId:'data', requestEvent:'DataRequested' },{ harnessId:'slides', requestEvent:'PresentationRequested' }] });
+  const researchRun = await runtime.run({ intent:'Проверить research boundary', role:'product-owner', workflow:'research-presentation', stages:[{ harnessId:'brief' },{ harnessId:'research', requestEvent:'ResearchRequested' },{ harnessId:'validation', requestEvent:'ValidationRequested' },{ harnessId:'synthesis', requestEvent:'SynthesisRequested' },{ harnessId:'data', requestEvent:'DataRequested' },{ harnessId:'narrative', requestEvent:'NarrativeRequested' },{ harnessId:'slides', requestEvent:'PresentationRequested' }] });
   assert.equal(researchRun.status, 'completed');
-  assert.deepEqual(researchRun.events.map(event => event.type), ['RunRequested', 'ArtifactCreated', 'BriefCreated', 'ResearchRequested', 'ArtifactCreated', 'EvidenceCollected', 'ResearchCompleted', 'ValidationRequested', 'ArtifactCreated', 'EvidenceValidated', 'ValidationCompleted', 'SynthesisRequested', 'ArtifactCreated', 'SynthesisPlanCreated', 'SynthesisCompleted', 'NarrativeRequested', 'ArtifactCreated', 'NarrativeCreated', 'NarrativeCompleted', 'DataRequested', 'ArtifactCreated', 'DataCreated', 'DataCompleted', 'PresentationRequested', 'ArtifactCreated', 'PresentationCreated', 'PresentationCompleted', 'RunCompleted']);
+  assert.deepEqual(researchRun.events.map(event => event.type), ['RunRequested', 'ArtifactCreated', 'BriefCreated', 'ResearchRequested', 'ArtifactCreated', 'EvidenceCollected', 'ResearchCompleted', 'ValidationRequested', 'ArtifactCreated', 'EvidenceValidated', 'ValidationCompleted', 'SynthesisRequested', 'ArtifactCreated', 'SynthesisPlanCreated', 'SynthesisCompleted', 'DataRequested', 'ArtifactCreated', 'DataCreated', 'DataCompleted', 'NarrativeRequested', 'ArtifactCreated', 'NarrativeCreated', 'NarrativeCompleted', 'PresentationRequested', 'ArtifactCreated', 'PresentationCreated', 'PresentationCompleted', 'RunCompleted']);
   const briefArtifact = researchRun.artifacts.find(item => item.type === 'Brief');
   const evidenceArtifact = researchRun.artifacts.find(item => item.type === 'EvidenceSet');
   const validationArtifact = researchRun.artifacts.find(item => item.type === 'ValidationReport');
@@ -70,7 +70,7 @@ try {
   const presentationArtifact = researchRun.artifacts.find(item => item.type === 'Presentation');
   assert.ok(briefArtifact && evidenceArtifact && validationArtifact && synthesisArtifact && narrativeArtifact && dataArtifactMeta && presentationArtifact);
   assert.deepEqual(synthesisArtifact.sourceArtifactIds, [briefArtifact.id, evidenceArtifact.id, validationArtifact.id]);
-  assert.deepEqual(narrativeArtifact.sourceArtifactIds, [synthesisArtifact.id]);
+  assert.deepEqual(narrativeArtifact.sourceArtifactIds, [synthesisArtifact.id, dataArtifactMeta.id]);
   assert.deepEqual(dataArtifactMeta.sourceArtifactIds, [synthesisArtifact.id]);
   assert.deepEqual(presentationArtifact.sourceArtifactIds, [synthesisArtifact.id, dataArtifactMeta.id]);
   assert.ok(!presentationArtifact.sourceArtifactIds.includes(narrativeArtifact.id), 'Slides are independent from Narrative');
@@ -101,7 +101,7 @@ try {
     data:{ objective:'Проверить', audience:'PO', keyClaims:[{ id:'C001', claim:'Только исходный claim', evidenceIds:['E001'], kind:'evidence-backed' }], uncertainties:[], requestedOutputs:[] }
   };
   const narrativeBefore = JSON.stringify(narrativeInput);
-  await createNarrativeHarness({ narrativeMarkdown }).execute({ run:{ id:'run-narrative-test' }, artifacts:[narrativeInput, { id:'evidence-input', type:'EvidenceSet', data:{ items:[{ id:'E001', claim:'Только исходный claim', sourceUri:'local://fixture' }] } }] });
+  await createNarrativeHarness({ narrativeMarkdown }).execute({ run:{ id:'run-narrative-test' }, artifacts:[narrativeInput, { id:'evidence-input', type:'EvidenceSet', data:{ items:[{ id:'E001', claim:'Только исходный claim', sourceUri:'local://fixture' }] } }, { id:'data-input', type:'DataArtifact', data:{ columns:['Evidence ID'], rows:[['E001']] } }] });
   assert.equal(JSON.stringify(narrativeInput), narrativeBefore, 'Narrative does not mutate SynthesisPlan');
   const slideInput = { id:'synthesis-slide-input', type:'SynthesisPlan', data:{ objective:'Проверить слайды', audience:'PO', keyClaims:[{ id:'C001', claim:'Поддержанный тезис', evidenceIds:['E001'], kind:'evidence-backed' }], uncertainties:[], requestedOutputs:[] } };
   const dataInput = { id:'data-slide-input', type:'DataArtifact', data:{ rows:[{ claim:'Поддержанный тезис', value:1 }] } };

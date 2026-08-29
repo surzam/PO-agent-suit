@@ -41,12 +41,12 @@ export async function createSuiteExecution({ rootDir, eventSink = null }) {
         stages.push({ id:'synthesis', harnessId:'synthesis', requestEvent:'SynthesisRequested', config:{ requestedOutputs:['decision-memo','presentation'] } });
       }
       if (['research-narrative','research-analysis','research-presentation'].includes(workflow)) {
-        registry.register(createNarrativeHarness({ narrativeMarkdown }));
-        stages.push({ id:'narrative', harnessId:'narrative', requestEvent:'NarrativeRequested' });
-      }
-      if (['research-analysis','research-presentation'].includes(workflow)) {
         registry.register(createDataHarness({ dataFromEvidence }));
         stages.push({ id:'data', harnessId:'data', requestEvent:'DataRequested' });
+      }
+      if (['research-narrative','research-analysis','research-presentation'].includes(workflow)) {
+        registry.register(createNarrativeHarness({ narrativeMarkdown }));
+        stages.push({ id:'narrative', harnessId:'narrative', requestEvent:'NarrativeRequested' });
       }
       if (workflow === 'research-presentation') {
         registry.register(createSlidesHarness({ slidesHtml }));
