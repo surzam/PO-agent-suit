@@ -4,3 +4,22 @@
 @media(max-width:1050px){.workstation-body{grid-template-columns:220px minmax(380px,1fr) 260px}.flow-chain{grid-template-columns:repeat(9,95px)}.terminal-tools input{display:none}}
 @media(max-width:820px){.workstation-body{grid-template-columns:minmax(0,1fr)}.context-world{display:none}.right-rail{position:absolute;right:0;top:140px;bottom:0;width:min(330px,92vw);z-index:6;box-shadow:-18px 0 35px #0009}.agent-work{grid-template-rows:auto minmax(0,1fr) 64px}.keyboard-deck{display:none}.event-keyboard{padding-top:12px}.flow-surface{grid-template-columns:105px minmax(0,1fr)}.app-head{padding:0 15px}.start-copy h1{font-size:52px}}
 .flow-chain{grid-template-columns:minmax(640px,1fr) 230px}.flow-main{display:grid;grid-template-columns:repeat(7,minmax(78px,1fr))}.flow-branch{position:relative;display:grid;grid-template-columns:1fr 1fr;border-left:1px solid var(--obs-line)}.flow-branch::before{content:"DATA →";position:absolute;top:4px;left:8px;color:var(--obs-muted);font-size:6px;letter-spacing:.08em}@media(max-width:1050px){.flow-chain{grid-template-columns:665px 210px}}
+/* The keyboard is a visible observation surface at every viewport size. It
+   yields vertical space to the terminal, but is never clipped or removed. */
+.agent-work{grid-template-rows:auto minmax(0,1fr) clamp(132px,20vh,176px)}
+.event-keyboard{overflow:hidden}
+.keyboard-deck span{height:clamp(15px,2.25vh,20px);font-size:clamp(6px,.55vw,7px)}
+@media(max-width:820px){
+  .agent-work{grid-template-rows:auto minmax(0,1fr) 126px}
+  .event-keyboard{padding:6px 10px 8px}
+  .keyboard-deck{display:block}
+  .keyboard-deck>div{gap:2px;margin-top:2px}
+  .keyboard-deck span{height:15px;font-size:6px}
+}
+@media(max-width:520px){
+  .agent-work{grid-template-rows:auto minmax(0,1fr) 112px}
+  .event-keyboard header{margin-bottom:3px}
+  .keyboard-deck span{height:13px;font-size:5px}
+  .keyboard-deck span.wide{flex:1.35}
+  .keyboard-deck span.space{flex:5}
+}
