@@ -66,8 +66,7 @@ export async function createSuiteExecution({ rootDir, eventSink = null }) {
     }),
     capabilities: () => [
       ...researchSources.map(source => ({ id:source.id.toUpperCase(), label:source.id === 'local' ? 'Local files' : 'Web research' })),
-      { id:'MODEL', label:'Local model' },
-      { id:'PRESENTATION', label:'Presentation renderer' }
+      { id:'MODEL', label:'Local model' }
     ],
     contracts: (workflow, mode = 'custom') => {
       const { registry, stages } = setup(workflow, mode);
