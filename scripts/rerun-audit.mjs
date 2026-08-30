@@ -20,16 +20,16 @@ try {
     { id:'research', harnessId:'research' },
     { id:'validation', harnessId:'validation' },
     { id:'synthesis', harnessId:'synthesis' },
-    { id:'narrative', harnessId:'narrative' },
     { id:'data', harnessId:'data' },
+    { id:'narrative', harnessId:'narrative' },
     { id:'slides', harnessId:'slides' }
   ];
   const registry = createHarnessRegistry([
     harness('research', 'EvidenceSet'),
     harness('validation', 'ValidationReport', ['EvidenceSet']),
     harness('synthesis', 'SynthesisPlan', ['ValidationReport']),
-    harness('narrative', 'Narrative', ['SynthesisPlan']),
-    harness('data', 'DataArtifact', ['SynthesisPlan']),
+    harness('data', 'DataArtifact', ['SynthesisPlan','EvidenceSet','ValidationReport']),
+    harness('narrative', 'Narrative', ['SynthesisPlan','DataArtifact']),
     harness('slides', 'Presentation', ['SynthesisPlan', 'DataArtifact'])
   ]);
   const runtime = createRuntime({ rootDir:temp, registry });

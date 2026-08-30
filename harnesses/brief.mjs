@@ -3,7 +3,7 @@ export const briefHarness = Object.freeze({
   version: 1,
   consumes: ['RunRequested'],
   produces: ['BriefCreated', 'ArtifactCreated'],
-  inputs: ['intent', 'role', 'workflow'],
+  inputs: ['Intent'],
   outputs: ['Brief'],
   async execute({ run, artifacts }) {
     const intent = artifacts?.find(item => item.type === 'Intent');

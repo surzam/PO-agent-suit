@@ -14,7 +14,7 @@ export function createHarnessRegistry(initial = []) {
     return [...harnesses.values()].filter(harness => harness.consumes.length === 0 || harness.consumes.includes(eventType));
   }
 
-  function list() { return [...harnesses.values()].map(harness => ({ id: harness.id, version: harness.version || 1, consumes: harness.consumes, produces: harness.produces })); }
+  function list() { return [...harnesses.values()].map(harness => ({ id: harness.id, version: harness.version || 1, consumes: harness.consumes, produces: harness.produces, inputs:[...(harness.inputs || [])], outputs:[...(harness.outputs || [])] })); }
   for (const harness of initial) register(harness);
   return { register, get, resolveFor, list };
 }

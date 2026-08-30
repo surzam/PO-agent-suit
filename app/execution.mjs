@@ -66,8 +66,13 @@ export async function createSuiteExecution({ rootDir, eventSink = null }) {
     }),
     capabilities: () => [
       ...researchSources.map(source => ({ id:source.id.toUpperCase(), label:source.id === 'local' ? 'Local files' : 'Web research' })),
-      { id:'MODEL', label:'Local model' }
+      { id:'MODEL', label:'Local model' },
+      { id:'PRESENTATION', label:'Presentation renderer' }
     ],
+    contracts: (workflow, mode = 'custom') => {
+      const { registry, stages } = setup(workflow, mode);
+      return stages.map(stage => ({ stageId:stage.id, harnessId:stage.harnessId, ...(registry.list().find(item => item.id === stage.harnessId) || {}) }));
+    },
     runtime: (workflow, mode = 'custom') => {
       const { registry, stages } = setup(workflow, mode);
       return { runtime:createRuntime({ rootDir, registry, roles:roleRegistry, observability:true, eventSink, defaultAllowEmptyIntent: mode === 'random', contextProvider:({ role }) => ({ availableContext:localProductContext, harnesses:registry.describe?.() || registry.list?.() || [], runtime:{ workflowStages: stages.map(stage => stage.id), artifactModel:'immutable artifacts with sourceArtifactIds' }, providerCapability:{ available:true,kind:'local-model' }, role }) }), stages };

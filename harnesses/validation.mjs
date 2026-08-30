@@ -6,7 +6,7 @@ export const validationHarness = Object.freeze({
   version: 1,
   consumes: ['ValidationRequested'],
   produces: ['EvidenceValidated', 'ValidationCompleted'],
-  inputs: ['EvidenceSet'],
+  inputs: ['Intent', 'EvidenceSet'],
   outputs: ['ValidationReport'],
   async execute({ run, artifacts }) {
     const evidenceSet = artifacts.find(item => item.type === 'EvidenceSet');
@@ -20,14 +20,14 @@ export const validationHarness = Object.freeze({
       if (!String(item.sourceUri || '').trim()) issues.push('missing sourceUri');
       if (!CONFIDENCE.has(item.confidence)) issues.push('invalid confidence');
       if (!KINDS.has(item.kind)) issues.push('invalid kind');
-      return { evidenceId: item.id || null, valid: issues.length === 0, issues };
+      return { decisionId:`validation:${String(item.id || 'missing')}`, evidenceId: item.id || null, valid: issues.length === 0, issues };
     });
     const inherited = evidenceSet.data.metadata || {};
     const conflicts = Array.isArray(inherited.conflicts) ? inherited.conflicts : [];
     const unknowns = Array.isArray(inherited.unknowns) ? inherited.unknowns : [];
     const valid = items.length > 0 && checks.every(item => item.valid);
     return {
-      artifacts: [{ type: 'ValidationReport', data: {
+      artifacts: [{ type: 'ValidationReport', sourceArtifactIds:[evidenceSet.id, ...(intent ? [intent.id] : [])], data: {
         runId: run.id,
         evidenceSetArtifactId: evidenceSet.id,
         intentArtifactId: intent?.id || evidenceSet.data.intentArtifactId || null,

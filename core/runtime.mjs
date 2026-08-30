@@ -24,7 +24,10 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
 
   async function appendEvent(run, type, payload = {}) {
     const safePayload = { ...payload };
-    if (safePayload.displayInput && !/^(?:files|local|web|mcp|model)\.(?:read|search|infer|call)\("[\p{L}\p{N} ._:/-]{1,120}"\)$/u.test(String(safePayload.displayInput))) delete safePayload.displayInput;
+    if (safePayload.displayInput && !/^(?:files|local|web|mcp|model|research|artifact|presentation)\.(?:read|open|search|infer|call|collect|create|render)\("[\p{L}\p{N} ._:/-]{1,120}"\)$/u.test(String(safePayload.displayInput))) delete safePayload.displayInput;
+    for (const key of ['operationId','producedByOperationId']) {
+      if (safePayload[key] && !/^[\p{L}\p{N}._:-]{1,200}$/u.test(String(safePayload[key]))) delete safePayload[key];
+    }
     const sequence = Number(run.events.at(-1)?.sequence || 0) + 1;
     const event = createEvent({ type, runId: run.id, payload:safePayload, sequence });
     run.events.push(event);
@@ -73,6 +76,18 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     const reusable = requiredTypes.map(type => sourceRun.artifacts.find(artifact => artifact.type === type));
     const missing = requiredTypes.filter((type, index) => !reusable[index]);
     if (missing.length) throw new Error(`RequiredArtifactUnavailable: ${missing.join(', ')}`);
+    const byId = new Map(sourceRun.artifacts.map(artifact => [artifact.id, artifact]));
+    const visited = new Set();
+    function validateUpstream(metadata) {
+      if (!metadata || visited.has(metadata.id)) return;
+      visited.add(metadata.id);
+      for (const sourceId of metadata.sourceArtifactIds || []) {
+        const source = byId.get(sourceId);
+        if (!source) throw new Error(`RequiredArtifactUnavailable: ${sourceId}`);
+        validateUpstream(source);
+      }
+    }
+    reusable.forEach(validateUpstream);
     const reusedArtifactIds = reusable.map(artifact => artifact.id);
     const run = await start({ intent: intent || sourceRun.intent, role: role || sourceRun.role, workflow: workflow || sourceRun.workflow, parentRunId: sourceRun.id, reusedArtifactIds });
     const context = { artifacts: [] };
@@ -133,9 +148,10 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     const value = createArtifact({ runId: run.id, type: artifact.type, data: artifact.data, sourceArtifactIds });
     const relativeFile = `artifacts/${value.id}.json`;
     value.file = relativeFile;
-    run.artifacts.push({ id: value.id, type: value.type, sourceArtifactIds, file: relativeFile });
+    const producedByOperationId = artifact.producedByOperationId || null;
+    run.artifacts.push({ id: value.id, type: value.type, sourceArtifactIds, file: relativeFile, ...(producedByOperationId ? { producedByOperationId } : {}) });
     await fs.writeFile(path.join(runsDir, run.id, relativeFile), `${JSON.stringify(value, null, 2)}\n`);
-    await appendEvent(run, 'ArtifactCreated', { artifactId: value.id, type: value.type });
+    await appendEvent(run, 'ArtifactCreated', { artifactId: value.id, type: value.type, ...(producedByOperationId ? { producedByOperationId } : {}) });
     return value;
   }
 
@@ -145,13 +161,16 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     const trigger = stage.requestEvent ? await appendEvent(run, stage.requestEvent, { harnessId: harness.id, stage: stage.id || harness.id }) : run.events.at(-1);
     if (observability) await appendEvent(run, 'HarnessStarted', { harnessId: harness.id, stage: stage.id || harness.id });
     const safeRun = Object.freeze({ ...run, events: [...run.events], artifacts: [...run.artifacts] });
-    const observe = async (type, payload = {}) => observability ? appendEvent(run, type, payload) : null;
+    let operationOrdinal = 0;
+    const createOperationId = (kind = 'operation') => `${run.id}:${stage.id || harness.id}:${String(kind).replace(/[^\p{L}\p{N}._-]/gu,'-').slice(0,48) || 'operation'}:${trigger.sequence}:${++operationOrdinal}`;
+    const observe = async (type, payload = {}) => observability ? appendEvent(run, type, { ...payload, harnessId:harness.id, stage:stage.id || harness.id }) : null;
     const result = resultContract(await harness.execute({
       run: safeRun,
       event: trigger,
       artifacts: context.artifacts,
       context: typeof contextProvider === 'function' ? await contextProvider({ run: safeRun, event: trigger, artifacts: context.artifacts, role: run.role }) : (contextProvider || {}),
       observe,
+      createOperationId,
       role: run.role,
       roleDefinition: roles?.get?.(run.role) || null,
       workflow: run.workflow,

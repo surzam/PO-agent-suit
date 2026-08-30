@@ -11,14 +11,14 @@ export function createResearchHarness({ researchService, artifactStore }) {
     version: 1,
     consumes: ['ResearchRequested'],
     produces: ['EvidenceCollected', 'ResearchCompleted'],
-    inputs: ['Brief'],
+    inputs: ['Intent', 'Brief'],
     outputs: ['EvidenceSet'],
-    async execute({ run, artifacts, config = {}, observe = async () => {} }) {
+    async execute({ run, artifacts, config = {}, observe = async () => {}, createOperationId }) {
       const brief = artifacts.find(item => item.type === 'Brief');
       const intent = artifacts.find(item => item.type === 'Intent');
       if (!brief) throw new Error('Research Harness requires a Brief artifact');
       const sessionId = `runtime-${run.id}`;
-      const started = researchService.start({ sessionId, origin:'user', mode:'deep', brief:brief.data, temperature:config.temperature, style:config.style, observe, researchOnly:true });
+      const started = researchService.start({ sessionId, origin:'user', mode:'deep', brief:brief.data, temperature:config.temperature, style:config.style, observe, createOperationId, researchOnly:true });
       const finished = await researchService.wait(started.generationId);
       if (finished.state === 'needs-context') {
         const cause=finished.failureCause || 'insufficient-context';
@@ -30,7 +30,7 @@ export function createResearchHarness({ researchService, artifactStore }) {
       if (!research) throw new Error('Legacy Research завершился без research result');
       const evidence = Array.isArray(research.evidence) ? research.evidence : [];
       return {
-        artifacts: [{ type: 'EvidenceSet', data: {
+        artifacts: [{ type: 'EvidenceSet', sourceArtifactIds:[brief.id, ...(intent ? [intent.id] : [])], data: {
           runId: run.id,
           briefArtifactId: brief.id,
           intentArtifactId: intent?.id || brief.data.intentArtifactId || null,

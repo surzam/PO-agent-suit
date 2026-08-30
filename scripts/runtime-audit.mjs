@@ -71,7 +71,7 @@ try {
   assert.ok(briefArtifact && evidenceArtifact && validationArtifact && synthesisArtifact && narrativeArtifact && dataArtifactMeta && presentationArtifact);
   assert.deepEqual(synthesisArtifact.sourceArtifactIds, [briefArtifact.id, evidenceArtifact.id, validationArtifact.id]);
   assert.deepEqual(narrativeArtifact.sourceArtifactIds, [synthesisArtifact.id, dataArtifactMeta.id]);
-  assert.deepEqual(dataArtifactMeta.sourceArtifactIds, [synthesisArtifact.id]);
+  assert.deepEqual(dataArtifactMeta.sourceArtifactIds, [synthesisArtifact.id, evidenceArtifact.id, validationArtifact.id]);
   assert.deepEqual(presentationArtifact.sourceArtifactIds, [synthesisArtifact.id, dataArtifactMeta.id]);
   assert.ok(!presentationArtifact.sourceArtifactIds.includes(narrativeArtifact.id), 'Slides are independent from Narrative');
   const synthesisFile = path.join(temp, 'runs', researchRun.id, 'artifacts', synthesisArtifact.file.split('/').at(-1));
@@ -88,6 +88,15 @@ try {
   assert.equal(dataArtifact.data.synthesisPlanArtifactId, synthesisArtifact.id);
   assert.equal(dataArtifact.data.rowProvenance[0].evidenceIds[0], 'E001');
   assert.equal(dataArtifact.data.rowProvenance[0].claimIds[0], 'C001');
+  assert.ok(dataArtifact.data.rowProvenance[0].rowId, 'Data rows have stable semantic identity');
+  assert.equal(dataArtifact.data.provenance.insights.every(item => item.kind === 'interpretation'), true, 'Insight is not promoted to Evidence');
+  const stableDataHarness=createDataHarness({dataFromEvidence});
+  const stablePlan={id:'stable-plan',type:'SynthesisPlan',data:{objective:'Stable identity',keyClaims:[{id:'C1',evidenceIds:['E1','E2']}]}},stableValidation={id:'stable-validation',type:'ValidationReport',data:{valid:true,items:[{decisionId:'validation:E1',evidenceId:'E1',valid:true,status:'validated'},{decisionId:'validation:E2',evidenceId:'E2',valid:true,status:'unknown'}]}};
+  const facts=[{id:'E1',claim:'one',quote:'one',kind:'fact',confidence:'direct',sourceId:'s1',sourceTitle:'one.md'},{id:'E2',claim:'two',quote:'two',kind:'fact',confidence:'direct',sourceId:'s2',sourceTitle:'two.md'}];
+  const materialize=async items=>(await stableDataHarness.execute({run:{id:'stable-run'},artifacts:[stablePlan,{id:'stable-evidence',type:'EvidenceSet',data:{items,metadata:{sourceCalls:2}}},stableValidation]})).artifacts[0].data;
+  const orderedData=await materialize(facts),reorderedData=await materialize([...facts].reverse());
+  assert.deepEqual(new Map(orderedData.provenance.rows.map(row=>[row.evidenceIds[0],row.rowId])),new Map(reorderedData.provenance.rows.map(row=>[row.evidenceIds[0],row.rowId])),'Data row identity survives reorder');
+  assert.equal(reorderedData.provenance.rows.find(row=>row.evidenceIds[0]==='E2').validationDecisionIds[0],'validation:E2','validation decisions survive unchanged into Data selection');
   const presentationFile = path.join(temp, 'runs', researchRun.id, 'artifacts', presentationArtifact.file.split('/').at(-1));
   const presentation = JSON.parse(await fs.readFile(presentationFile, 'utf8'));
   assert.equal(presentation.data.synthesisPlanArtifactId, synthesisArtifact.id);
@@ -101,10 +110,13 @@ try {
     data:{ objective:'Проверить', audience:'PO', keyClaims:[{ id:'C001', claim:'Только исходный claim', evidenceIds:['E001'], kind:'evidence-backed' }], uncertainties:[], requestedOutputs:[] }
   };
   const narrativeBefore = JSON.stringify(narrativeInput);
-  await createNarrativeHarness({ narrativeMarkdown }).execute({ run:{ id:'run-narrative-test' }, artifacts:[narrativeInput, { id:'evidence-input', type:'EvidenceSet', data:{ items:[{ id:'E001', claim:'Только исходный claim', sourceUri:'local://fixture' }] } }, { id:'data-input', type:'DataArtifact', data:{ columns:['Evidence ID'], rows:[['E001']] } }] });
+  const substrateInput={ id:'data-input', type:'DataArtifact', data:{ columns:['Evidence ID','Claim'], rows:[['E001','Только исходный claim']], provenance:{ rows:[{ rowId:'row-stable',rowIndex:0,kind:'fact',evidenceIds:['E001'],claimIds:['C001'],sourceTitle:'fixture.md' }],metrics:[],insights:[] } } };
+  const hiddenEvidence={ id:'evidence-input', type:'EvidenceSet', data:{ items:[{ id:'E999', claim:'Скрытый факт не должен попасть в Narrative', sourceUri:'local://hidden' }] } };
+  const narrativeResult=await createNarrativeHarness({ narrativeMarkdown }).execute({ run:{ id:'run-narrative-test' }, artifacts:[narrativeInput,hiddenEvidence,substrateInput] });
   assert.equal(JSON.stringify(narrativeInput), narrativeBefore, 'Narrative does not mutate SynthesisPlan');
+  assert.doesNotMatch(narrativeResult.artifacts[0].data.content,/Скрытый факт/,'Narrative cannot recover raw EvidenceSet through an adapter');
   const slideInput = { id:'synthesis-slide-input', type:'SynthesisPlan', data:{ objective:'Проверить слайды', audience:'PO', keyClaims:[{ id:'C001', claim:'Поддержанный тезис', evidenceIds:['E001'], kind:'evidence-backed' }], uncertainties:[], requestedOutputs:[] } };
-  const dataInput = { id:'data-slide-input', type:'DataArtifact', data:{ rows:[{ claim:'Поддержанный тезис', value:1 }] } };
+  const dataInput = { id:'data-slide-input', type:'DataArtifact', data:{ columns:['Evidence ID','Claim'],rows:[['E001','Поддержанный тезис']],provenance:{rows:[{rowId:'row-slide',rowIndex:0,kind:'fact',evidenceIds:['E001'],claimIds:['C001']}],metrics:[],insights:[]} } };
   const slideResult = await createSlidesHarness({ slidesHtml: async () => '<section>slide</section>' }).execute({ run:{ id:'run-slide-test' }, artifacts:[slideInput, dataInput], config:{} });
   assert.deepEqual(slideResult.artifacts[0].sourceArtifactIds, [slideInput.id, dataInput.id]);
   await assert.rejects(() => createSlidesHarness({ slidesHtml }).execute({ run:{ id:'run-slide-missing' }, artifacts:[slideInput], config:{} }), /requires a DataArtifact/);
@@ -128,6 +140,12 @@ try {
     { id:'evidence-1', type:'EvidenceSet', data:{ items:[{ id:'E001', claim:'fact', sourceUri:'local://fixture', confidence:'direct', kind:'fact' }], metadata:{} } },
     { id:'validation-1', type:'ValidationReport', data:{ valid:true } }
   ], config:{} }), /unknown Evidence IDs: E999/);
+  let retryCalls=0;const retryEvents=[];
+  const retrySynthesis=createSynthesisHarness({modelJson:async()=>{retryCalls+=1;if(retryCalls===1)throw new SyntaxError("Expected ',' after property");return{objective:'retry',audience:'PO',keyClaims:[{id:'C1',claim:'fact',evidenceIds:['E1'],kind:'evidence-backed'}],uncertainties:[],structure:[],requestedOutputs:[]}}});
+  const retryResult=await retrySynthesis.execute({run:{id:'run-retry'},role:'product-owner',workflow:'research-presentation',artifacts:[{id:'b',type:'Brief',data:{goal:'g'}},{id:'e',type:'EvidenceSet',data:{items:[{id:'E1',claim:'fact',sourceUri:'local://fixture',confidence:'direct',kind:'fact'}]}},{id:'v',type:'ValidationReport',data:{valid:true,items:[{evidenceId:'E1',valid:true}]}}],observe:async(type,payload)=>retryEvents.push({type,payload}),createOperationId:kind=>`retry:${kind}`});
+  assert.equal(retryCalls,2,'malformed structured provider response is retried without fallback content');
+  assert.deepEqual(retryEvents.filter(event=>event.type==='InferenceStarted').map(event=>event.payload.operationId),['retry:inference','retry:inference-retry'],'each provider call has distinct operation correlation');
+  assert.equal(retryResult.artifacts[0].producedByOperationId,'retry:inference-retry');
   const extensible = createHarnessRegistry([briefHarness, { id:'echo', consumes:['EchoRequested'], async execute({ run }) { return { artifacts:[{ type:'Echo', data:{ intent:run.intent } }], events:[{ type:'EchoCompleted' }] }; } }]);
   const extensibleRuntime = createRuntime({ rootDir: temp, registry:extensible });
   const echoRun = await extensibleRuntime.run({ intent:'Проверить extensibility', stages:[{ harnessId:'brief' },{ harnessId:'echo', requestEvent:'EchoRequested' }] });

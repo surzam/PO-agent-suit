@@ -85,6 +85,13 @@ export function createResearchService({ modelJson, sources = [], render, store, 
     if (typeof job.observe === 'function') await job.observe(type, payload);
   }
 
+  function operationId(job, kind) {
+    job.operationOrdinal = Number(job.operationOrdinal || 0) + 1;
+    return typeof job.createOperationId === 'function'
+      ? job.createOperationId(kind)
+      : `${job.generationId}:${kind}:${job.operationOrdinal}`;
+  }
+
   function ensureActive(job) {
     if (job.controller.signal.aborted) throw Object.assign(new Error('Исследование остановлено'), { code: 'CANCELLED' });
     if (Date.now() >= job.deadline) throw new Error('Исследование достигло лимита времени');
@@ -100,8 +107,9 @@ export function createResearchService({ modelJson, sources = [], render, store, 
   }
 
   async function planResearch(job) {
-    await observe(job, 'InferenceRequested', { capability:'MODEL', purpose:'research-plan', displayInput:'model.infer("research-plan")' });
-    await observe(job, 'InferenceStarted', { capability:'MODEL', purpose:'research-plan', displayInput:'model.infer("research-plan")' });
+    const inferenceId=operationId(job,'research-plan');
+    await observe(job, 'InferenceRequested', { operationId:inferenceId, capability:'MODEL', purpose:'research-plan', displayInput:'model.infer("research-plan")' });
+    await observe(job, 'InferenceStarted', { operationId:inferenceId, capability:'MODEL', purpose:'research-plan', displayInput:'model.infer("research-plan")' });
     let value;
     try {
       value = await modelJson(
@@ -109,9 +117,9 @@ export function createResearchService({ modelJson, sources = [], render, store, 
         JSON.stringify(job.brief),
         { signal: job.controller.signal, temperature: 0.35, maxTokens: 900 }
       );
-      await observe(job, 'InferenceCompleted', { capability:'MODEL', purpose:'research-plan' });
+      await observe(job, 'InferenceCompleted', { operationId:inferenceId, capability:'MODEL', purpose:'research-plan' });
     } catch (error) {
-      await observe(job, 'InferenceFailed', { capability:'MODEL', purpose:'research-plan', code:error.code || 'PROVIDER_FAILURE' });
+      await observe(job, 'InferenceFailed', { operationId:inferenceId, capability:'MODEL', purpose:'research-plan', code:error.code || 'PROVIDER_FAILURE' });
       throw Object.assign(error, { code:error.code || 'PROVIDER_FAILURE' });
     }
     const needs = Array.isArray(value?.needs) ? value.needs.slice(0, 4) : [];
@@ -133,33 +141,36 @@ export function createResearchService({ modelJson, sources = [], render, store, 
       const documents = [];
       for (const source of activeSources) {
         if (sourceCalls >= config.maxSourceCalls) break;
+        const searchId=operationId(job,`${source.id}-search`);
         try {
           const displayInput = `${source.id}.search("research-context")`;
-          await observe(job, 'CapabilityRequested', { capability:source.id.toUpperCase(), operation:'search', displayInput });
-          await observe(job, 'CapabilityStarted', { capability:source.id.toUpperCase(), operation:'search', displayInput });
+          await observe(job, 'CapabilityRequested', { operationId:searchId, capability:source.id.toUpperCase(), operation:'search', displayInput });
+          await observe(job, 'CapabilityStarted', { operationId:searchId, capability:source.id.toUpperCase(), operation:'search', displayInput });
           let found = await source.search({ query: `${need.query} ${job.brief.question}`, limit: 4, signal: job.controller.signal });
           // A conversational question often contains no repository terms. Keep the
           // run useful by collecting the real product context; never invent facts.
           if (!found.length && source.id === 'local') found = await source.search({ query: 'PO Agent Suite product context', limit: 4, signal: job.controller.signal });
           sourceCalls += 1; stats[source.id] = (stats[source.id] || 0) + 1;
-          await observe(job, 'CapabilityCompleted', { capability:source.id.toUpperCase(), operation:'search', found:found.length });
+          await observe(job, 'CapabilityCompleted', { operationId:searchId, capability:source.id.toUpperCase(), operation:'search', found:found.length });
           emit(job, 'researching', `${source.id}: найдено ${found.length}`, { need:need.title, source:source.id, found:found.length, sourceCalls, evidence:evidence.length, sources:activeSources.map(item => item.id), capability:source.id.toUpperCase() });
           if (source.fetch) {
             for (const candidate of found) {
               if (webPages >= config.maxWebPages || sourceCalls >= config.maxSourceCalls) break;
-              try { const target=String(candidate.title || candidate.url || 'source').slice(0,96); const safeTarget=target.split(/[\\/]/).at(-1).replace(/[^\p{L}\p{N} ._-]/gu,'').slice(0,72)||'source'; const meta=safeSourceMetadata({sourceId:candidate.sourceId,sourceKind:source.id,sourceTitle:target}); await observe(job,'SourceOpened',{capability:source.id.toUpperCase(),...meta,target,displayInput:`${source.id}.read("${safeTarget}")`}); const document=await source.fetch(candidate, { signal: job.controller.signal }); documents.push({...document,sourceId:document.sourceId || meta.sourceId}); await observe(job,'SourceRead',{capability:source.id.toUpperCase(),...meta,target}); webPages += 1; sourceCalls += 1; stats[source.id] += 1; emit(job, 'researching', `Прочитан источник: ${target}`, { need:need.title, source:source.id, sourceCalls, evidence:evidence.length, sources:activeSources.map(item => item.id) }); } catch (error) { job.sourceFailures=(job.sourceFailures||0)+1; await observe(job,'CapabilityFailed',{capability:source.id.toUpperCase(),operation:'read',code:error.code || 'SOURCE_UNAVAILABLE'}); need.dods[0].limitations.push(`${candidate.url}: ${error.message}`); }
+              const readId=operationId(job,`${source.id}-read`);
+              try { const target=String(candidate.title || candidate.url || 'source').slice(0,96); const safeTarget=target.split(/[\\/]/).at(-1).replace(/[^\p{L}\p{N} ._-]/gu,'').slice(0,72)||'source'; const meta=safeSourceMetadata({sourceId:candidate.sourceId,sourceKind:source.id,sourceTitle:target}); await observe(job,'SourceOpened',{operationId:readId,capability:source.id.toUpperCase(),...meta,target,displayInput:`${source.id}.read("${safeTarget}")`}); const document=await source.fetch(candidate, { signal: job.controller.signal }); documents.push({...document,sourceId:document.sourceId || meta.sourceId}); await observe(job,'SourceRead',{operationId:readId,capability:source.id.toUpperCase(),...meta,target}); webPages += 1; sourceCalls += 1; stats[source.id] += 1; emit(job, 'researching', `Прочитан источник: ${target}`, { need:need.title, source:source.id, sourceCalls, evidence:evidence.length, sources:activeSources.map(item => item.id) }); } catch (error) { job.sourceFailures=(job.sourceFailures||0)+1; await observe(job,'CapabilityFailed',{operationId:readId,capability:source.id.toUpperCase(),operation:'read',code:error.code || 'SOURCE_UNAVAILABLE'}); need.dods[0].limitations.push(`${candidate.url}: ${error.message}`); }
             }
           } else {
             documents.push(...found);
             for (const document of found) {
               const meta=safeSourceMetadata(document);
-              await observe(job,'SourceOpened',{capability:source.id.toUpperCase(),...meta,displayInput:`${source.id}.read("research-context")`});
-              await observe(job,'SourceRead',{capability:source.id.toUpperCase(),...meta});
+              const readId=operationId(job,`${source.id}-read`);
+              await observe(job,'SourceOpened',{operationId:readId,capability:source.id.toUpperCase(),...meta,displayInput:`${source.id}.read("research-context")`});
+              await observe(job,'SourceRead',{operationId:readId,capability:source.id.toUpperCase(),...meta});
             }
           }
         } catch (error) {
           job.sourceFailures=(job.sourceFailures||0)+1;
-          await observe(job,'CapabilityFailed',{capability:source.id.toUpperCase(),operation:'search',code:error.code || 'SOURCE_UNAVAILABLE'});
+          await observe(job,'CapabilityFailed',{operationId:searchId,capability:source.id.toUpperCase(),operation:'search',code:error.code || 'SOURCE_UNAVAILABLE'});
           need.dods[0].limitations.push(`${source.id}: ${error.message}`);
         }
       }
@@ -170,15 +181,16 @@ export function createResearchService({ modelJson, sources = [], render, store, 
       }
       const sourceList = documents.slice(0, 4).map((doc, index) => ({ ref: `S${index + 1}`, sourceId:doc.sourceId || `${doc.sourceKind || 'source'}:${index + 1}`, sourceUri: doc.sourceUri, sourceTitle: doc.sourceTitle, sourceKind: doc.sourceKind, text: doc.text.slice(0, 4000) }));
       emit(job, 'researching', `Извлекаю Evidence из ${sourceList.length} источников`, { sourceCalls, evidence:evidence.length, sources:activeSources.map(source => source.id), capability:'MODEL' });
-      await observe(job,'InferenceRequested',{capability:'MODEL',purpose:'evidence-extraction',displayInput:'model.infer("evidence-extraction")'});
-      await observe(job,'InferenceStarted',{capability:'MODEL',purpose:'evidence-extraction',displayInput:'model.infer("evidence-extraction")'});
+      const extractionId=operationId(job,'evidence-extraction');
+      await observe(job,'InferenceRequested',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction',displayInput:'model.infer("evidence-extraction")'});
+      await observe(job,'InferenceStarted',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction',displayInput:'model.infer("evidence-extraction")'});
       let extracted;
       try { extracted = await modelJson(
         'Ты извлекаешь Evidence из предоставленных источников. Верни JSON evidence: [{claim,quote,sourceRef,confidence,kind}], conflicts, unknowns. Используй только sourceRef из списка. claim должен быть проверяемым и не содержать новых чисел. confidence: direct|corroborated|inferred|conflicted; kind: fact|interpretation|unknown. Цитата должна быть дословным коротким фрагментом или пустой.',
         JSON.stringify({ brief: job.brief, need, sources: sourceList }),
         { signal: job.controller.signal, temperature: 0.1, maxTokens: 900 }
-      ); await observe(job,'InferenceCompleted',{capability:'MODEL',purpose:'evidence-extraction'}); }
-      catch(error) { await observe(job,'InferenceFailed',{capability:'MODEL',purpose:'evidence-extraction',code:error.code || 'PROVIDER_FAILURE'}); throw Object.assign(error,{code:error.code || 'PROVIDER_FAILURE'}); }
+      ); await observe(job,'InferenceCompleted',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction'}); }
+      catch(error) { await observe(job,'InferenceFailed',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction',code:error.code || 'PROVIDER_FAILURE'}); throw Object.assign(error,{code:error.code || 'PROVIDER_FAILURE'}); }
       const evidenceBeforeExtraction = evidence.length;
       for (const item of Array.isArray(extracted?.evidence) ? extracted.evidence : []) {
         const source = sourceList.find(candidate => candidate.ref === item.sourceRef);
@@ -245,22 +257,24 @@ export function createResearchService({ modelJson, sources = [], render, store, 
     for (const source of localSources) {
       ensureActive(job);
       const displayInput = `${source.id}.search("research-context")`;
-      await observe(job, 'CapabilityRequested', { capability:source.id.toUpperCase(), operation:'search', displayInput });
-      await observe(job, 'CapabilityStarted', { capability:source.id.toUpperCase(), operation:'search', displayInput });
+      const searchId=operationId(job,`${source.id}-search`);
+      await observe(job, 'CapabilityRequested', { operationId:searchId, capability:source.id.toUpperCase(), operation:'search', displayInput });
+      await observe(job, 'CapabilityStarted', { operationId:searchId, capability:source.id.toUpperCase(), operation:'search', displayInput });
       let documents;
       try {
         documents = await source.search({ query:`${job.brief.question} PO Agent Suite Data Narrative Slides Evidence`, limit:6, signal:job.controller.signal });
-        await observe(job, 'CapabilityCompleted', { capability:source.id.toUpperCase(), operation:'search', found:documents.length });
+        await observe(job, 'CapabilityCompleted', { operationId:searchId, capability:source.id.toUpperCase(), operation:'search', found:documents.length });
       } catch (error) {
-        await observe(job, 'CapabilityFailed', { capability:source.id.toUpperCase(), operation:'search', code:error.code || 'SOURCE_UNAVAILABLE' });
+        await observe(job, 'CapabilityFailed', { operationId:searchId, capability:source.id.toUpperCase(), operation:'search', code:error.code || 'SOURCE_UNAVAILABLE' });
         documents = [];
       }
       sourceCalls += 1; sourceStats[source.id] = (sourceStats[source.id] || 0) + 1;
       emit(job, 'researching', `${source.id}: найдено ${documents.length}`, { source:source.id, found:documents.length, sources:localSources.map(item => item.id), evidence:evidence.length, sourceCalls, capability:source.id.toUpperCase() });
       for (const document of documents) {
         const meta=safeSourceMetadata(document);
-        await observe(job,'SourceOpened',{capability:source.id.toUpperCase(),...meta,displayInput:`${source.id}.read("research-context")`});
-        await observe(job,'SourceRead',{capability:source.id.toUpperCase(),...meta});
+        const readId=operationId(job,`${source.id}-read`);
+        await observe(job,'SourceOpened',{operationId:readId,capability:source.id.toUpperCase(),...meta,displayInput:`${source.id}.read("research-context")`});
+        await observe(job,'SourceRead',{operationId:readId,capability:source.id.toUpperCase(),...meta});
         const quote = describeLocalDocument(document); if (!quote) continue;
         const id = `E${String(evidence.length + 1).padStart(3, '0')}`;
         const claim = quote;
@@ -320,14 +334,14 @@ export function createResearchService({ modelJson, sources = [], render, store, 
     }
   }
 
-  function start({ sessionId = 'default', origin, mode, temperature = 0.7, style, observe:observer, brief, researchOnly = false } = {}) {
+  function start({ sessionId = 'default', origin, mode, temperature = 0.7, style, observe:observer, createOperationId, brief, researchOnly = false } = {}) {
     const current = session(sessionId);
     if (brief && typeof brief === 'object') { current.brief=cleanBrief(brief,'user',[{role:'user',content:brief.question}]); current.ready=true; }
     const selectedOrigin = origin || (current.ready && current.brief ? 'user' : 'random');
     if (selectedOrigin === 'user' && !current.brief) throw new Error('Сначала сформируйте исследовательский заказ в чате');
     const id = generationId();
     const selectedMode = mode || (selectedOrigin === 'random' ? 'random' : 'deep');
-    const job = { generationId: id, mode:selectedMode, state: 'brief', progress: null, brief: selectedOrigin === 'user' ? current.brief : null, result: null, error: null, failureCause:null, requiredContext:[], sourceFailures:0, observe:observer, events: [], listeners: new Set(), controller: new AbortController(), deadline: Date.now() + config.timeoutMs, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const job = { generationId: id, mode:selectedMode, state: 'brief', progress: null, brief: selectedOrigin === 'user' ? current.brief : null, result: null, error: null, failureCause:null, requiredContext:[], sourceFailures:0, observe:observer, createOperationId, operationOrdinal:0, events: [], listeners: new Set(), controller: new AbortController(), deadline: Date.now() + config.timeoutMs, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
     jobs.set(id, job);
     job.done = execute(job, { origin:selectedOrigin, mode:selectedMode, brief:job.brief, temperature, style, researchOnly });
     job.done.catch(() => {});

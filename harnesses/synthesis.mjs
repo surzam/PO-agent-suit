@@ -13,9 +13,9 @@ export function createSynthesisHarness({ modelJson }) {
     version: 1,
     consumes: ['SynthesisRequested'],
     produces: ['SynthesisPlanCreated', 'SynthesisCompleted'],
-    inputs: ['Brief', 'EvidenceSet', 'ValidationReport'],
+    inputs: ['Intent', 'Brief', 'EvidenceSet', 'ValidationReport'],
     outputs: ['SynthesisPlan'],
-    async execute({ run, artifacts, role, roleDefinition, workflow, config = {}, observe = async () => {} }) {
+    async execute({ run, artifacts, role, roleDefinition, workflow, config = {}, observe = async () => {}, createOperationId = () => `${run.id}:synthesis:inference:1` }) {
       const brief = artifacts.find(item => item.type === 'Brief');
       const evidenceSet = artifacts.find(item => item.type === 'EvidenceSet');
       const validation = artifacts.find(item => item.type === 'ValidationReport');
@@ -24,15 +24,10 @@ export function createSynthesisHarness({ modelJson }) {
       if (!validation.data.valid) throw new Error('Synthesis Harness requires a valid ValidationReport');
       const evidence = Array.isArray(evidenceSet.data.items) ? evidenceSet.data.items : [];
       const allowedIds = new Set(evidence.map(item => String(item.id)));
-      await observe('InferenceRequested',{capability:'MODEL',purpose:'synthesis',displayInput:'model.infer("synthesis")'});
-      await observe('InferenceStarted',{capability:'MODEL',purpose:'synthesis',displayInput:'model.infer("synthesis")'});
-      let response;
-      try { response = await modelJson(
-        `Ты Synthesis Harness AgentSuite. Собери только JSON SynthesisPlan из Brief, EvidenceSet и ValidationReport. Не добавляй факты без Evidence ID. Роль — профессиональный worldview, а не готовый ответ: используй её priorities/questions/decisionCriteria для выбора framing, но не меняй факты. Верни поля objective, audience, keyClaims [{id,claim,evidenceIds,kind}], uncertainties, structure, requestedOutputs. kind: evidence-backed|interpretation|assumption|recommendation|unknown. Каждый значимый факт обязан ссылаться на существующие Evidence ID; мнение без ссылки пометь interpretation, assumption или recommendation. Не создавай новые числа. Русский язык. Worldview: ${JSON.stringify(roleDefinition || { id:role, priorities:[], questions:[], decisionCriteria:[] })}`,
-        JSON.stringify({ role, roleDefinition, workflow, brief:brief.data, evidence:evidence.map(item => ({ id:item.id, claim:item.claim, sourceUri:item.sourceUri, confidence:item.confidence, kind:item.kind })), validation:validation.data, requestedOutputs:config.requestedOutputs || [] }),
-        { temperature: Number(config.temperature ?? 0.35), maxTokens: Number(config.maxTokens ?? 1400) }
-      ); await observe('InferenceCompleted',{capability:'MODEL',purpose:'synthesis'}); }
-      catch(error) { await observe('InferenceFailed',{capability:'MODEL',purpose:'synthesis',code:error.code || 'PROVIDER_FAILURE'}); throw error; }
+      const system=`Ты Synthesis Harness AgentSuite. Собери только JSON SynthesisPlan из Brief, EvidenceSet и ValidationReport. Не добавляй факты без Evidence ID. Роль — профессиональный worldview, а не готовый ответ: используй её priorities/questions/decisionCriteria для выбора framing, но не меняй факты. Верни поля objective, audience, keyClaims [{id,claim,evidenceIds,kind}], uncertainties, structure, requestedOutputs. Не больше четырёх keyClaims; пиши кратко. kind: evidence-backed|interpretation|assumption|recommendation|unknown. Каждый значимый факт обязан ссылаться на существующие Evidence ID; мнение без ссылки пометь interpretation, assumption или recommendation. Не создавай новые числа. Русский язык. Worldview: ${JSON.stringify(roleDefinition || { id:role, priorities:[], questions:[], decisionCriteria:[] })}`;
+      const input=JSON.stringify({ role, roleDefinition, workflow, brief:brief.data, evidence:evidence.map(item => ({ id:item.id, claim:item.claim, sourceUri:item.sourceUri, confidence:item.confidence, kind:item.kind })), validation:validation.data, requestedOutputs:config.requestedOutputs || [] });
+      let response,operationId;
+      for(let attempt=0;attempt<2;attempt+=1){operationId=createOperationId(attempt?'inference-retry':'inference');await observe('InferenceRequested',{operationId,capability:'MODEL',purpose:'synthesis',displayInput:'model.infer("synthesis")'});await observe('InferenceStarted',{operationId,capability:'MODEL',purpose:'synthesis',displayInput:'model.infer("synthesis")'});try{response=await modelJson(system,input,{temperature:Number(config.temperature??0.35),maxTokens:Number(config.maxTokens??1800)});await observe('InferenceCompleted',{operationId,capability:'MODEL',purpose:'synthesis'});break}catch(error){const malformed=error instanceof SyntaxError||/JSON|Expected .* after|Unexpected end/i.test(String(error.message));await observe('InferenceFailed',{operationId,capability:'MODEL',purpose:'synthesis',code:malformed?'INVALID_PROVIDER_RESPONSE':error.code||'PROVIDER_FAILURE'});if(!malformed||attempt===1)throw error}}
       const rawClaims = Array.isArray(response?.keyClaims) ? response.keyClaims : [{ id:'C001', claim:response?.centralThesis || brief.data.goal, evidenceIds:evidence.filter(item => item.kind === 'fact').slice(0, 2).map(item => item.id), kind:'evidence-backed' }];
       const keyClaims = rawClaims.map(normalizeClaim).filter(item => item.claim);
       const invalidIds = keyClaims.flatMap(item => item.evidenceIds.filter(id => !allowedIds.has(id)));
@@ -54,7 +49,7 @@ export function createSynthesisHarness({ modelJson }) {
         requestedOutputs: Array.isArray(response?.requestedOutputs) ? response.requestedOutputs.map(String) : (config.requestedOutputs || [])
       };
       return {
-        artifacts: [{ type:'SynthesisPlan', sourceArtifactIds:[brief.id, evidenceSet.id, validation.id], data }],
+        artifacts: [{ type:'SynthesisPlan', sourceArtifactIds:[...(intent ? [intent.id] : []), brief.id, evidenceSet.id, validation.id], producedByOperationId:operationId, data }],
         events: [
           { type:'SynthesisPlanCreated', payload:{ claimCount:keyClaims.length, requestedOutputs:data.requestedOutputs } },
           { type:'SynthesisCompleted', payload:{ synthesisPlanReady:true } }

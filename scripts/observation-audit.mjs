@@ -9,7 +9,7 @@ import { projectObservation } from '../core/observation.mjs';
 import { createAgentSuiteApi } from '../api/agentsuite-api.mjs';
 
 const temp=await fs.mkdtemp(path.join(os.tmpdir(),'agentsuite-observation-'));
-const harness={id:'probe',inputs:[],outputs:['Probe'],async execute({observe}){await observe('CapabilityStarted',{capability:'FILES',displayInput:'files.read("architecture.md")'});await observe('CapabilityCompleted',{capability:'FILES'});return{artifacts:[{type:'Probe',data:{ok:true}}],events:[]}}};
+const harness={id:'probe',inputs:[],outputs:['Probe'],async execute({observe,createOperationId}){const operationId=createOperationId('files-read');await observe('CapabilityStarted',{operationId,capability:'FILES',displayInput:'files.read("architecture.md")'});await observe('CapabilityCompleted',{operationId,capability:'FILES'});return{artifacts:[{type:'Probe',data:{ok:true},producedByOperationId:operationId}],events:[]}}};
 const runtime=createRuntime({rootDir:temp,registry:createHarnessRegistry([harness]),observability:true});
 const launched=await runtime.launch({intent:'journal ordering',stages:[{id:'probe',harnessId:'probe'}]});
 assert.equal(launched.run.status,'running','launch returns the existing run before completion');
@@ -20,6 +20,7 @@ assert.ok(completed.events.every(e=>e.eventId===`${completed.id}:${String(e.sequ
 const projection=projectObservation(await runtime.inspect(completed.id),{capabilities:['FILES','MODEL']});
 assert.equal(projection.status,'completed');assert.equal(projection.capabilities.find(x=>x.id==='FILES').state,'complete');
 assert.equal(projection.consoleLines.find(x=>x.type==='CapabilityStarted').displayInput,'files.read("architecture.md")');
+assert.equal(projection.agentActions.length,1);assert.equal(projection.agentActions[0].relatedArtifactIds.length,1,'Artifact is attached only by producer operation correlation');
 assert.equal(projection.capabilities.find(x=>x.id==='MODEL').state,'idle','configuration does not imply activity');
 const lineageRun={id:'lineage-run',role:'product-owner',status:'completed',events:[
   {sequence:1,eventId:'lineage-run:00000001',id:'lineage-run:00000001',type:'SourceOpened',at:new Date().toISOString(),payload:{sourceId:'local:docs/architecture/runtime.md',sourceKind:'local',safeDisplayName:'runtime.md',contextRootId:'project',sourceUri:'/private/secret?token=hidden'}},
@@ -37,6 +38,26 @@ assert.equal(lineage.contextWorld.sources[0].state,'used-as-evidence');
 assert.equal(lineage.contextWorld.sources[0].safeUri,undefined,'unsafe raw URI is not projected');
 assert.deepEqual(lineage.evidence.items[0].usedBy,['C002']);
 assert.deepEqual(lineage.claims[0].outputTypes.sort(),['Narrative','Presentation']);
+
+const sameDescriptor={id:'ops',role:'product-owner',status:'completed',events:[
+  {sequence:1,eventId:'ops:00000001',type:'CapabilityStarted',at:new Date().toISOString(),payload:{operationId:'op-a',capability:'FILES',displayInput:'files.read("same.md")'}},
+  {sequence:2,eventId:'ops:00000002',type:'CapabilityCompleted',at:new Date().toISOString(),payload:{operationId:'op-a',capability:'FILES'}},
+  {sequence:3,eventId:'ops:00000003',type:'CapabilityStarted',at:new Date().toISOString(),payload:{operationId:'op-b',capability:'FILES',displayInput:'files.read("same.md")'}},
+  {sequence:4,eventId:'ops:00000004',type:'CapabilityCompleted',at:new Date().toISOString(),payload:{operationId:'op-b',capability:'FILES'}},
+  {sequence:5,eventId:'ops:00000005',type:'CapabilityStarted',at:new Date().toISOString(),payload:{capability:'FILES',displayInput:'files.read("uncorrelated.md")'}},
+  {sequence:6,eventId:'ops:00000006',type:'ArtifactCreated',at:new Date().toISOString(),payload:{artifactId:'free-artifact',type:'Probe'}}
+]};
+const operationProjection=projectObservation(sameDescriptor,{capabilities:['FILES'],artifacts:[{id:'free-artifact',type:'Probe',data:{}}]});
+assert.equal(operationProjection.agentActions.length,2,'same descriptor with different operation correlation remains distinct');
+assert.equal(operationProjection.agentActions.every(action=>action.relatedArtifactIds.length===0),true,'same stage or chronology never implies artifact correlation');
+assert.ok(operationProjection.terminalRecords.some(record=>record.kind==='event'&&record.event.sequence===5),'missing correlation remains a separate terminal record');
+assert.ok(operationProjection.terminalRecords.some(record=>record.kind==='event'&&record.event.type==='ArtifactCreated'),'uncorrelated ArtifactCreated remains separate');
+assert.deepEqual(projectObservation(sameDescriptor,{capabilities:['FILES'],artifacts:[{id:'free-artifact',type:'Probe',data:{}}]}).agentActions,operationProjection.agentActions,'same journal rebuilds same terminal actions');
+
+const typed=projectObservation({id:'typed',role:'product-owner',status:'completed',events:[]},{artifacts:[
+  {id:'s',type:'SynthesisPlan',data:{}},{id:'d',type:'DataArtifact',sourceArtifactIds:['s'],data:{}},{id:'n',type:'Narrative',sourceArtifactIds:['s','d'],data:{}}
+],contracts:[{stageId:'narrative',inputs:['SynthesisPlan','DataArtifact'],outputs:['Narrative']} ]});
+assert.deepEqual(typed.dependencies.filter(edge=>edge.toArtifactId==='n').map(edge=>edge.relation),['frames','grounds'],'Inspector lineage retains both typed direct responsibilities');
 
 const apiRoot=path.join(temp,'api');const api=await createAgentSuiteApi({rootDir:apiRoot});
 const server=http.createServer((req,res)=>api.handle(req,res));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const base=`http://127.0.0.1:${server.address().port}`;

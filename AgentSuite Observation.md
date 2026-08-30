@@ -1925,4 +1925,37 @@ AgentSuite начинается с:
 # Observation UX Grammar — one-line definition
 
 > **Каждое состояние AgentSuite должно быть видно ровно настолько, насколько оно помогает человеку понять рождение текущей истории, и ни одно движение интерфейса не должно существовать без реального события системы.**
+# R13.5 — Agent Terminal Workstation
+
+Observation Mode is the working surface of AgentSuite. It is a rebuildable read-only projection of canonical state, never execution state:
+
+```text
+configuration + registries + journal + artifacts
+                     ↓
+             Observation Projection
+                     ↓
+              Agent Workstation
+```
+
+The workstation metaphor is explicit: Context World is where the agent looks; Agent Terminal is what it observably does; Capabilities are its available tools; Evidence is what it established; Flow is semantic dependency; View is professional framing; Outputs are materializations. Event Keyboard is subordinate presentation of a new safe action descriptor and never acts as stdin.
+
+Three truth graphs remain independent:
+
+1. Artifact lineage records actual direct Harness reads through `sourceArtifactIds`.
+2. Operation correlation groups Runtime facts only through canonical `operationId` and optional `producedByOperationId`.
+3. Journal sequence records canonical chronology through monotonic `eventId` / `sequence`.
+
+The projection may visually connect these graphs but must not infer operation correlation from stage, time, or `displayInput`. Typed dependency labels come from versioned contract knowledge in the projection layer; unknown relations remain `upstream`.
+
+Semantic Flow is not chronological execution order:
+
+```text
+DISCOVERY → INTENT → BRIEF → RESEARCH → VALIDATION → SYNTHESIS
+                                                        ↓
+                                                       DATA
+                                                     ↙      ↘
+                                                  STORY  PRESENTATION
+```
+
+`SynthesisPlan` remains a direct framing input to Story and Presentation. `DataArtifact` is their direct factual grounding input. Data carries stable row, metric, and insight identities and keeps fact, derived metric, runtime metadata, and interpretation authority distinct.
 
