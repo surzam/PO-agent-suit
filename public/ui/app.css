@@ -91,3 +91,22 @@
   .terminal-history{padding-left:14px;padding-right:14px}
   .keyboard-deck{padding-left:0;padding-right:0}
 }
+.system-readout{
+  position:absolute;
+  top:8px;
+  right:18px;
+  display:flex;
+  gap:18px;
+  align-items:flex-start;
+  padding:5px 0 5px 16px;
+  border-left:1px solid #8ff1df28;
+  color:var(--obs-muted);
+}
+.system-readout span{display:grid;gap:3px;min-width:66px}
+.system-readout i{font:7px var(--mono);font-style:normal;letter-spacing:.12em;color:#60848a}
+.system-readout b{font:500 12px var(--mono);color:var(--obs-fg);white-space:nowrap}
+.system-readout span:first-child b{color:var(--obs-active)}
+@media(max-width:700px){
+  .system-readout{position:static;margin:8px 14px 0;padding:7px 0 0;border-left:0;border-top:1px solid #8ff1df20;justify-content:space-between}
+  .intent-strip{padding-bottom:8px}
+}

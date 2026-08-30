@@ -15,3 +15,9 @@ export class ObservationMode{
  inspect(value){const [kind,...rest]=String(value).split(':');this.inspector={kind,id:rest.join(':')};this.render(this.state,this.meta)}
  bind(){this.terminal.bind(this.root);this.root.querySelectorAll('[data-inspect]').forEach(button=>button.onclick=()=>this.inspect(button.dataset.inspect));this.root.querySelector('[data-inspector-close]')?.addEventListener('click',()=>{this.inspector=null;this.render(this.state,this.meta)});this.root.querySelectorAll('[data-open-artifact]').forEach(button=>button.onclick=()=>this.openArtifact?.(button.dataset.openArtifact));}
 }
+
+const systemText=value=>String(value??'—');
+const formatDuration=milliseconds=>{const seconds=Math.max(0,Math.floor(Number(milliseconds||0)/1000));return [Math.floor(seconds/3600),Math.floor(seconds%3600/60),seconds%60].map((value,index)=>index?String(value).padStart(2,'0'):String(value)).join(':')};
+const systemPanel=state=>{const system=state?.system||{},gpu=system.gpu?.[0],started=Date.parse(state?.startedAt||'');let elapsed=Number(state?.elapsedMs||0);if(state?.status==='running'&&started)elapsed=Math.max(0,Date.now()-started);const ram=system.process?.rssMiB?`${system.process.rssMiB} MiB`:'—';const gpuText=gpu?`${systemText(gpu.name)} · ${Number.isFinite(gpu.utilization)?`${gpu.utilization}%`:'—'}`:'UNAVAILABLE';return `<aside class="system-readout" aria-label="Системное состояние"><span><i>RUN TIME</i><b>${formatDuration(elapsed)}</b></span><span><i>APP RAM</i><b>${ram}</b></span><span><i>GPU</i><b>${esc(gpuText)}</b></span></aside>`};
+const observationRender=ObservationMode.prototype.render;
+ObservationMode.prototype.render=function(state,meta={}){observationRender.call(this,state,meta);const intent=this.root.querySelector('.intent-strip');if(intent)intent.insertAdjacentHTML('beforeend',systemPanel(state));};

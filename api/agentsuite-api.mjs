@@ -1,6 +1,8 @@
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
+import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createSuiteExecution } from '../app/execution.mjs';
 import { ensureDemoFixture } from './demo-fixture.mjs';
@@ -9,6 +11,14 @@ import { projectObservation } from '../core/observation.mjs';
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const publicDir = path.join(root, 'public');
 const json = (res, value, status = 200) => { res.writeHead(status, {'content-type':'application/json; charset=utf-8','cache-control':'no-store'}); res.end(JSON.stringify(value)); };
+const execFileAsync = (file, args, options = {}) => new Promise(resolve => execFile(file, args, { ...options, timeout: 900 }, (error, stdout = '') => resolve(error ? '' : stdout)));
+const bytesToMiB = value => Math.round(Number(value || 0) / 1024 / 1024);
+async function systemSnapshot() {
+  const gpuText = await execFileAsync('nvidia-smi', ['--query-gpu=name,utilization.gpu,memory.used,memory.total', '--format=csv,noheader,nounits']);
+  const gpu = gpuText.trim().split(/\r?\n/).map(line => line.split(',').map(value => value.trim())).filter(row => row.length >= 4).map(([name, utilization, used, total]) => ({ name, utilization: Number(utilization), memoryUsedMiB: Number(used), memoryTotalMiB: Number(total) }));
+  const memory = process.memoryUsage();
+  return { sampledAt: new Date().toISOString(), process: { rssMiB: bytesToMiB(memory.rss), heapMiB: bytesToMiB(memory.heapUsed) }, system: { usedMiB: bytesToMiB(os.totalmem() - os.freemem()), totalMiB: bytesToMiB(os.totalmem()) }, gpu: gpu.length ? gpu : null };
+}
 async function body(req) { let text=''; for await (const chunk of req) text += chunk; return text ? JSON.parse(text) : {}; }
 
 function mime(file) {
@@ -79,6 +89,7 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
     if (req.method === 'POST' && url.pathname === '/api/context') { const input=await body(req); if(!input.name||!input.content)return json(res,{error:'Context file requires name and content'},400); if(String(input.content).length>1_000_000)return json(res,{error:'Context file exceeds 1 MB'},413); return json(res,{ok:true,...execution.addContext({name:String(input.name),text:String(input.content)})},201); }
     if (req.method === 'GET' && url.pathname === '/api/runs') return json(res,{runs:await allRuns()});
     if (req.method === 'GET' && url.pathname === '/api/runtime/capabilities') return json(res,{capabilities:execution.capabilities()});
+    if (req.method === 'GET' && url.pathname === '/api/system') return json(res,await systemSnapshot());
     if (req.method === 'GET' && url.pathname === '/api/roles') return json(res,{roles:execution.roleRegistry.list()});
     const eventRoute = url.pathname.match(/^\/api\/runs\/([^/]+)\/events$/);
     if (req.method === 'GET' && eventRoute) return stream(req,res,eventRoute[1],url);
