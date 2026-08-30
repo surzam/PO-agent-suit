@@ -36,6 +36,7 @@
   "build": {
     "appId": "local.poagent.suite",
     "productName": "PO Agent Suite",
+    "afterPack": "scripts/after-pack.mjs",
     "files": [
       "electron/**/*",
       "core/**/*",
