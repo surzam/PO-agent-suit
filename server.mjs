@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import pptxgen from 'pptxgenjs';
 import YAML from 'yaml';
 import { createArtifactStore } from './research/storage.mjs';
-import { createLocalSource, createWebSource } from './research/sources.mjs';
+import { createLocalSource, createWebSource, createSearxngSource } from './research/sources.mjs';
 import { createResearchService, dataFromEvidence } from './research/service.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -534,7 +534,13 @@ await artifactStore.initialize();
 const realRoot = await fs.realpath(root);
 const configuredRoots = (await Promise.all((appConfig.research?.local?.allowed_paths || ['.']).map(async value => fs.realpath(path.resolve(root, value)).catch(() => null)))).filter(value => value && (value === realRoot || value.startsWith(`${realRoot}${path.sep}`)));
 export const researchSources = [createLocalSource({ roots:configuredRoots, maxFiles:Number(appConfig.research?.local?.max_files || 200) })];
-if (process.env.PO_RESEARCH_WEB !== '0' && appConfig.research?.web?.enabled !== false) researchSources.push(createWebSource({ rateLimitMs:Number(appConfig.research?.web?.rate_limit_ms || 1000) }));
+const webConfig=appConfig.research?.web || {};
+const searxngEndpoint=process.env.PO_SEARXNG_URL || webConfig.endpoint;
+if (process.env.PO_RESEARCH_WEB !== '0' && webConfig.enabled !== false) researchSources.push(
+  (String(process.env.PO_SEARCH_PROVIDER || webConfig.provider || 'duckduckgo-html').toLowerCase() === 'searxng')
+    ? createSearxngSource({ endpoint:searxngEndpoint, rateLimitMs:Number(webConfig.rate_limit_ms || 1000) })
+    : createWebSource({ rateLimitMs:Number(webConfig.rate_limit_ms || 1000) })
+);
 const researchService = createResearchService({
   modelJson, sources:researchSources, render:renderResearchGeneration, store:artifactStore,
   limits:{ timeoutMs:Number(appConfig.research?.limits?.timeout_ms || 600000), maxSourceCalls:Number(appConfig.research?.limits?.max_source_calls || 24), maxIterationsPerDod:Number(appConfig.research?.limits?.max_iterations_per_dod || 4), stagnationLimit:Number(appConfig.research?.limits?.stagnation_limit || 2), maxWebPages:Number(appConfig.research?.web?.max_pages || 3) }

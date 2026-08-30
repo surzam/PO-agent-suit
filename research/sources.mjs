@@ -164,4 +164,34 @@ export function createWebSource({ rateLimitMs = 1000 } = {}) {
   };
 }
 
+export function createSearxngSource({ endpoint, rateLimitMs = 1000 } = {}) {
+  if (!endpoint) throw new Error('SearXNG provider requires an endpoint');
+  const base = new URL(endpoint);
+  if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password) throw new Error('Invalid SearXNG endpoint');
+  const cache = new Map(); let lastRequest = 0;
+  async function throttled(url, options = {}) {
+    const wait = Math.max(0, rateLimitMs - (Date.now() - lastRequest));
+    if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+    lastRequest = Date.now();
+    return fetch(url, { ...options, headers: { accept:'application/json', 'user-agent':'PO-Agent-Suite-Research/1.0', ...(options.headers || {}) } });
+  }
+  return {
+    id:'web', provider:'searxng',
+    describeConfiguration() { return { id:'web', kind:'web', provider:'searxng', endpoint:base.origin, roots:[], sources:[] }; },
+    async search({ query, limit = 5, signal }) {
+      const key=String(query).trim(); if (cache.has(key)) return cache.get(key);
+      const url=new URL('/search',base); url.searchParams.set('q',key); url.searchParams.set('format','json'); url.searchParams.set('categories','general');
+      const response=await throttled(url,{signal}); if (!response.ok) throw new Error(`SearXNG HTTP ${response.status}`);
+      const payload=await response.json();
+      const candidates=(Array.isArray(payload.results)?payload.results:[]).map(item=>({url:String(item.url||''),title:String(item.title||item.url||'').trim(),snippet:String(item.content||'').trim()})).filter(item=>/^https?:\/\//i.test(item.url)&&item.title).slice(0,limit);
+      cache.set(key,candidates); return candidates;
+    },
+    async fetch(candidate,{signal}={}) {
+      const result=await safeFetch(candidate.url,{signal}); const page=cleanPage(result.body,result.url);
+      const sourceId=`web:${crypto.createHash('sha256').update(candidate.url).digest('hex').slice(0,16)}`;
+      return { sourceId, sourceUri:candidate.url, sourceTitle:page.title||candidate.title, sourceKind:'web', text:page.text||candidate.snippet };
+    }
+  };
+}
+
 export { safeFetch };

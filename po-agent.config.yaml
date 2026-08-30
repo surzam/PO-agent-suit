@@ -26,6 +26,9 @@ research:
   web:
     enabled: true
     provider: duckduckgo-html
+    # To use a self-hosted SearXNG instance set provider: searxng and either
+    # endpoint below or PO_SEARXNG_URL in the environment.
+    # endpoint: http://127.0.0.1:8080
     max_pages: 3
     rate_limit_ms: 1000
     timeout_ms: 15000
