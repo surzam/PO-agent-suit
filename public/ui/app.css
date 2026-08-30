@@ -23,3 +23,71 @@
   .keyboard-deck span.wide{flex:1.35}
   .keyboard-deck span.space{flex:5}
 }
+
+/* R13.6 workstation skin: a quiet eDEX/Dex-like instrument panel. The
+   texture is structural only; activity and motion still come from Runtime. */
+.obs-workstation{
+  position:relative;
+  isolation:isolate;
+  background-color:var(--obs-bg);
+  background-image:
+    linear-gradient(#8ff1df08 1px,transparent 1px),
+    linear-gradient(90deg,#8ff1df08 1px,transparent 1px),
+    radial-gradient(circle at 50% 42%,#12384455,transparent 58%);
+  background-size:32px 32px,32px 32px,100% 100%;
+}
+.obs-workstation::before,.obs-workstation::after{
+  content:"";
+  position:absolute;
+  pointer-events:none;
+  z-index:0;
+}
+.obs-workstation::before{
+  inset:8px;
+  border:1px solid #8ff1df18;
+  clip-path:polygon(0 0,42px 0,42px 1px,calc(100% - 42px) 1px,calc(100% - 42px) 0,100% 0,100% 42px,calc(100% - 1px) 42px,calc(100% - 1px) calc(100% - 42px),100% calc(100% - 42px),100% 100%,calc(100% - 42px) 100%,calc(100% - 42px) calc(100% - 1px),42px calc(100% - 1px),42px 100%,0 100%,0 calc(100% - 42px),1px calc(100% - 42px),1px 42px,0 42px);
+}
+.obs-workstation>*{position:relative;z-index:1}
+.flow-surface{background:linear-gradient(90deg,#071318ee,#0a1a20dd);box-shadow:0 1px 0 #8ff1df14}
+.flow-title{position:relative;padding-left:24px}
+.flow-title::before,.agent-terminal>header::before,.event-keyboard header::before{
+  content:"";
+  display:inline-block;
+  width:5px;
+  height:5px;
+  margin-right:7px;
+  border:1px solid var(--obs-accent);
+  box-shadow:0 0 8px #8ff1df88;
+}
+.flow-title::before{position:absolute;left:12px;top:18px}
+.workstation-body{background:#03090ccc}
+.context-world,.right-rail{background:#071318dd}
+.context-world{box-shadow:inset -12px 0 24px #0003}
+.right-rail{box-shadow:inset 12px 0 24px #0003}
+.intent-strip{position:relative;padding-left:27px;background:linear-gradient(90deg,#081a20,#061015 70%)}
+.intent-strip::before{content:"OBSERVATION / LIVE RUNTIME";display:block;color:#4f747b;font:7px var(--mono);letter-spacing:.18em;margin-bottom:3px}
+.intent-strip small{display:none}
+.agent-terminal{background:linear-gradient(135deg,#03090c,#061116 55%,#03090c)}
+.agent-terminal>header{position:relative;padding-left:27px;background:#061015;border-bottom-color:#8ff1df20}
+.agent-terminal>header::before{position:absolute;left:15px;top:18px}
+.terminal-history{padding:14px 24px 24px}
+.terminal-record{border-bottom-color:#8ff1df12;padding:9px 0}
+.terminal-record.action{text-shadow:0 0 10px #8ff1df18}
+.terminal-record.action.running{box-shadow:inset 10px 0 18px -18px var(--obs-active)}
+.terminal-record i{color:var(--obs-active)}
+.event-keyboard{background:linear-gradient(180deg,#081a20,#061015);box-shadow:0 -10px 24px #0005}
+.event-keyboard header{align-items:center;color:#8aaeb2}
+.event-keyboard header::before{border-color:var(--obs-warning);box-shadow:0 0 8px #ffd16688}
+.keyboard-deck{padding:2px 5px 0}
+.keyboard-deck>div{max-width:920px;margin-left:auto;margin-right:auto}
+.keyboard-deck span{border-color:#37616a;background:#0a2027aa;border-radius:2px;box-shadow:inset 0 0 0 1px #0005,0 2px 0 #020708;color:#85a6aa;transition:background-color .18s ease,color .18s ease,box-shadow .18s ease}
+.keyboard-deck span:hover{background:#10343d}
+.rail-default{background:linear-gradient(135deg,#071318,#061015)}
+.rail-default section>header{border-bottom-color:#8ff1df20}
+.rail-capabilities button{background:#071a20;border-color:#37616a}
+.rail-capabilities button.active{box-shadow:0 0 14px #8ff1df44}
+@media(max-width:820px){
+  .obs-workstation::before{inset:5px}
+  .terminal-history{padding-left:14px;padding-right:14px}
+  .keyboard-deck{padding-left:0;padding-right:0}
+}
