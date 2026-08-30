@@ -1,5 +1,6 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { createRuntime } from '../core/runtime.mjs';
 import { createHarnessRegistry } from '../core/registry.mjs';
 import { briefHarness } from '../harnesses/brief.mjs';
@@ -17,9 +18,29 @@ export async function createSuiteExecution({ rootDir, eventSink = null }) {
   const [{ researchService, researchSources, artifactStore, modelJson, narrativeMarkdown, slidesHtml, dataFromEvidence }, { createResearchHarness }] = await Promise.all([
     import('../server.mjs'), import('../harnesses/research.mjs')
   ]);
-  const projectRoot=path.dirname(path.dirname(new URL(import.meta.url).pathname));
+  // Resolve context from the packaged application that owns this module. In
+  // development this is the repository root; in an AppImage it can be an
+  // asar path under process.resourcesPath. Keep only files that really exist:
+  // Intent Discovery must receive honest local context, never synthetic text.
+  const moduleRoot=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+  const resourceRoot=process.resourcesPath ? path.resolve(process.resourcesPath) : null;
+  const contextRoots=[
+    moduleRoot,
+    resourceRoot && path.join(resourceRoot,'app.asar'),
+    resourceRoot && path.join(resourceRoot,'app'),
+    resourceRoot
+  ].filter(Boolean).map(value=>path.resolve(value));
   const contextFiles=['product-lore.md','package.json','core/contracts.mjs','roles/product-owner.mjs'];
-  const localProductContext=(await Promise.all(contextFiles.map(async file=>({file,content:await fs.readFile(path.join(projectRoot,file),'utf8').then(text=>text.slice(0,5000)).catch(()=>null)})))).filter(item=>item.content);
+  const localProductContext=[];
+  for (const file of contextFiles) {
+    for (const base of contextRoots) {
+      const content=await fs.readFile(path.join(base,file),'utf8').then(text=>text.slice(0,5000)).catch(()=>null);
+      if (content) {
+        localProductContext.push({ file, content });
+        break;
+      }
+    }
+  }
   function setup(workflow, mode = 'custom') {
     const registry = createHarnessRegistry([briefHarness, validationHarness]);
     const stages = [];
