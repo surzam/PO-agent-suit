@@ -68,5 +68,10 @@ const randomDone = await service.wait(random.generationId);
 assert.equal(randomDone.brief.origin, 'random');
 assert.notEqual(randomDone.generationId, completed.generationId);
 
+let planAttempts=0,extractionAttempts=0;const retryEvents=[];
+const retryModel=async system=>{if(system.includes('планировщик deep research')){planAttempts+=1;if(planAttempts===1)throw Object.assign(new SyntaxError('truncated plan JSON'),{code:'MALFORMED_RESPONSE'});return{needs:[{title:'A',query:'a',dods:[{criterion:'a'}]},{title:'B',query:'b',dods:[{criterion:'b'}]}]}}if(system.includes('извлекаешь Evidence')){extractionAttempts+=1;if(extractionAttempts===1)throw Object.assign(new SyntaxError('truncated evidence JSON'),{code:'MALFORMED_RESPONSE'});return{evidence:[{claim:'retry fact',quote:'retry',sourceRef:'S1',confidence:'direct',kind:'fact'}],conflicts:[],unknowns:[]}}throw new Error('unexpected retry prompt')};
+const retryService=createResearchService({modelJson:retryModel,sources:[source],render,store,limits:{timeoutMs:5000,maxSourceCalls:8,maxWebPages:0}});
+const retryRun=retryService.start({origin:'user',brief:{question:'Retry structured research',goal:'verify',audience:'PO'},researchOnly:true,observe:async(type,payload)=>retryEvents.push({type,payload}),createOperationId:kind=>`retry:${kind}:${retryEvents.length}`});const retryDone=await retryService.wait(retryRun.generationId);assert.equal(retryDone.state,'complete');assert.equal(planAttempts,2);assert.ok(extractionAttempts>=2);assert.ok(retryEvents.filter(event=>event.type==='InferenceFailed'&&event.payload.code==='MALFORMED_RESPONSE').length>=2,'each malformed provider response remains observable');assert.equal(new Set(retryEvents.filter(event=>event.type==='InferenceStarted').map(event=>event.payload.operationId)).size,retryEvents.filter(event=>event.type==='InferenceStarted').length,'repair retries keep distinct operation IDs');
+
 await fs.rm(temp, { recursive:true, force:true });
 console.log('research audit: brief invariance · 2-question cap · Evidence integrity · atomic artifacts · restart recovery · interrupted-job failure · SSRF addresses · random brief · PASS');

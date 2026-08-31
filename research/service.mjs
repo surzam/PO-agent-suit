@@ -94,7 +94,7 @@ export function createResearchService({ modelJson, sources = [], render, store, 
 
   function ensureActive(job) {
     if (job.controller.signal.aborted) throw Object.assign(new Error('Исследование остановлено'), { code: 'CANCELLED' });
-    if (Date.now() >= job.deadline) throw new Error('Исследование достигло лимита времени');
+    if (Date.now() >= job.deadline) throw Object.assign(new Error('Исследование достигло лимита времени'),{code:'RESEARCH_TIMEOUT'});
   }
 
   async function randomBrief(job) {
@@ -107,22 +107,14 @@ export function createResearchService({ modelJson, sources = [], render, store, 
   }
 
   async function planResearch(job) {
-    const inferenceId=operationId(job,'research-plan');
-    await observe(job, 'InferenceRequested', { operationId:inferenceId, capability:'MODEL', purpose:'research-plan', displayInput:'model.infer("research-plan")' });
-    await observe(job, 'InferenceStarted', { operationId:inferenceId, capability:'MODEL', purpose:'research-plan', displayInput:'model.infer("research-plan")' });
     let value;
-    try {
-      value = await modelJson(
-        'Ты планировщик deep research для Product Owner. Верни JSON needs: 2–4 объекта {title, query, dods:[{criterion}]}. Для каждого need 1–3 конкретных критерия готовности. Запросы должны быть пригодны для локального и интернет-поиска. Не отвечай на исследовательский вопрос.',
-        JSON.stringify(job.brief),
-        { signal: job.controller.signal, temperature: 0.35, maxTokens: 900 }
-      );
-      await observe(job, 'InferenceCompleted', { operationId:inferenceId, capability:'MODEL', purpose:'research-plan' });
-    } catch (error) {
-      await observe(job, 'InferenceFailed', { operationId:inferenceId, capability:'MODEL', purpose:'research-plan', code:error.code || 'PROVIDER_FAILURE' });
-      throw Object.assign(error, { code:error.code || 'PROVIDER_FAILURE' });
+    for(let attempt=0;attempt<2;attempt+=1){
+      const inferenceId=operationId(job,attempt?'research-plan-repair':'research-plan');
+      await observe(job,'InferenceRequested',{operationId:inferenceId,capability:'MODEL',purpose:'research-plan',displayInput:'model.infer("research-plan")'});await observe(job,'InferenceStarted',{operationId:inferenceId,capability:'MODEL',purpose:'research-plan',displayInput:'model.infer("research-plan")'});
+      try{value=await modelJson('Ты планировщик deep research для Product Owner. Верни JSON needs: 2–4 объекта {title, query, dods:[{criterion}]}. Для каждого need 1–3 конкретных критерия готовности. Запросы должны быть пригодны для локального и интернет-поиска. Не отвечай на исследовательский вопрос.',JSON.stringify(job.brief),{signal:job.controller.signal,temperature:attempt?0.15:0.35,maxTokens:attempt?650:500,timeoutMs:job.budgets?.researchPlanningMs||180000});if(!Array.isArray(value?.needs))throw Object.assign(new Error('Research plan returned malformed structured output'),{code:'MALFORMED_RESPONSE'});await observe(job,'InferenceCompleted',{operationId:inferenceId,capability:'MODEL',purpose:'research-plan'});break}
+      catch(error){const malformed=error.code==='MALFORMED_RESPONSE'||error instanceof SyntaxError;const code=malformed?'MALFORMED_RESPONSE':error.code||'PROVIDER_FAILURE';await observe(job,'InferenceFailed',{operationId:inferenceId,capability:'MODEL',purpose:'research-plan',code});if(malformed&&attempt===0)continue;throw Object.assign(error,{code})}
     }
-    const needs = Array.isArray(value?.needs) ? value.needs.slice(0, 4) : [];
+    const needs = Array.isArray(value?.needs) ? value.needs.slice(0, 2) : [];
     if (needs.length < 2) throw new Error('Модель не сформировала исследовательский план из 2–4 потребностей');
     return needs.map((need, index) => ({
       title: String(need.title || `Потребность ${index + 1}`),
@@ -132,10 +124,10 @@ export function createResearchService({ modelJson, sources = [], render, store, 
   }
 
   async function gather(job, needs, mode) {
-    const evidence = []; const conflicts = []; const unknowns = []; const stats = {};
+    const evidence = []; const conflicts = []; const unknowns = []; const stats = {},documentCache=new Map();
     let sourceCalls = 0; let webPages = 0;
-    const activeSources = mode === 'random' ? sources.filter(source => source.id !== 'web') : sources;
-    for (const need of needs) {
+    const activeSources = sources;
+    for (const [needIndex,need] of needs.entries()) {
       ensureActive(job);
       emit(job, 'researching', `Ищу: ${need.title}`, { need:need.title, sourceCalls, evidence:evidence.length, sources:activeSources.map(source => source.id) });
       const documents = [];
@@ -144,20 +136,20 @@ export function createResearchService({ modelJson, sources = [], render, store, 
         const searchId=operationId(job,`${source.id}-search`);
         try {
           const displayInput = `${source.id}.search("research-context")`;
-          await observe(job, 'CapabilityRequested', { operationId:searchId, capability:source.id.toUpperCase(), operation:'search', displayInput });
-          await observe(job, 'CapabilityStarted', { operationId:searchId, capability:source.id.toUpperCase(), operation:'search', displayInput });
+          await observe(job, 'CapabilityRequested', { operationId:searchId, capability:source.id.toUpperCase(), provider:source.provider||source.id, operation:'search', displayInput });
+          await observe(job, 'CapabilityStarted', { operationId:searchId, capability:source.id.toUpperCase(), provider:source.provider||source.id, operation:'search', displayInput });
           let found = await source.search({ query: `${need.query} ${job.brief.question}`, limit: 4, signal: job.controller.signal });
           // A conversational question often contains no repository terms. Keep the
           // run useful by collecting the real product context; never invent facts.
           if (!found.length && source.id === 'local') found = await source.search({ query: 'PO Agent Suite product context', limit: 4, signal: job.controller.signal });
           sourceCalls += 1; stats[source.id] = (stats[source.id] || 0) + 1;
-          await observe(job, 'CapabilityCompleted', { operationId:searchId, capability:source.id.toUpperCase(), operation:'search', found:found.length });
+          await observe(job, 'CapabilityCompleted', { operationId:searchId, capability:source.id.toUpperCase(), provider:source.provider||source.id,operation:'search', found:found.length });
           emit(job, 'researching', `${source.id}: найдено ${found.length}`, { need:need.title, source:source.id, found:found.length, sourceCalls, evidence:evidence.length, sources:activeSources.map(item => item.id), capability:source.id.toUpperCase() });
           if (source.fetch) {
             for (const candidate of found) {
               if (webPages >= config.maxWebPages || sourceCalls >= config.maxSourceCalls) break;
               const readId=operationId(job,`${source.id}-read`);
-              try { const target=String(candidate.title || candidate.url || 'source').slice(0,96); const safeTarget=target.split(/[\\/]/).at(-1).replace(/[^\p{L}\p{N} ._-]/gu,'').slice(0,72)||'source'; const meta=safeSourceMetadata({sourceId:candidate.sourceId,sourceKind:source.id,sourceTitle:target}); await observe(job,'SourceOpened',{operationId:readId,capability:source.id.toUpperCase(),...meta,target,displayInput:`${source.id}.read("${safeTarget}")`}); const document=await source.fetch(candidate, { signal: job.controller.signal }); documents.push({...document,sourceId:document.sourceId || meta.sourceId}); await observe(job,'SourceRead',{operationId:readId,capability:source.id.toUpperCase(),...meta,target}); webPages += 1; sourceCalls += 1; stats[source.id] += 1; emit(job, 'researching', `Прочитан источник: ${target}`, { need:need.title, source:source.id, sourceCalls, evidence:evidence.length, sources:activeSources.map(item => item.id) }); } catch (error) { job.sourceFailures=(job.sourceFailures||0)+1; await observe(job,'CapabilityFailed',{operationId:readId,capability:source.id.toUpperCase(),operation:'read',code:error.code || 'SOURCE_UNAVAILABLE'}); need.dods[0].limitations.push(`${candidate.url}: ${error.message}`); }
+              try { const target=String(candidate.title || candidate.url || 'source').slice(0,96); const safeTarget=target.split(/[\\/]/).at(-1).replace(/[^\p{L}\p{N} ._-]/gu,'').slice(0,72)||'source'; const meta=safeSourceMetadata({sourceId:candidate.sourceId,sourceKind:source.id,sourceTitle:target}); const cacheKey=meta.sourceId||candidate.url||target;let document=documentCache.get(cacheKey);if(!document){await observe(job,'SourceOpened',{operationId:readId,capability:source.id.toUpperCase(),...meta,target,displayInput:`${source.id}.read("${safeTarget}")`});document=await source.fetch(candidate,{signal:job.controller.signal});documentCache.set(cacheKey,document);await observe(job,'SourceRead',{operationId:readId,capability:source.id.toUpperCase(),...meta,target});webPages+=1;sourceCalls+=1;stats[source.id]+=1}documents.push({...document,sourceId:document.sourceId||meta.sourceId});emit(job,'researching',`Прочитан источник: ${target}`,{need:need.title,source:source.id,sourceCalls,evidence:evidence.length,sources:activeSources.map(item=>item.id)}); } catch (error) { job.sourceFailures=(job.sourceFailures||0)+1; await observe(job,'CapabilityFailed',{operationId:readId,capability:source.id.toUpperCase(),operation:'read',code:error.code || 'SOURCE_UNAVAILABLE'}); need.dods[0].limitations.push(`${candidate.url}: ${error.message}`); }
             }
           } else {
             documents.push(...found);
@@ -179,18 +171,12 @@ export function createResearchService({ modelJson, sources = [], render, store, 
         unknowns.push(message); need.dods.forEach(dod => { dod.status = 'unknown'; dod.limitations.push(message); });
         continue;
       }
-      const sourceList = documents.slice(0, 4).map((doc, index) => ({ ref: `S${index + 1}`, sourceId:doc.sourceId || `${doc.sourceKind || 'source'}:${index + 1}`, sourceUri: doc.sourceUri, sourceTitle: doc.sourceTitle, sourceKind: doc.sourceKind, text: doc.text.slice(0, 4000) }));
+      const uniqueDocuments=[...new Map(documents.map(doc=>[doc.sourceId||doc.sourceUri||doc.sourceTitle,doc])).values()];
+      const sourceList = uniqueDocuments.slice(0, 2).map((doc, index) => ({ ref: `S${index + 1}`, sourceId:doc.sourceId || `${doc.sourceKind || 'source'}:${index + 1}`, sourceUri: doc.sourceUri, sourceTitle: doc.sourceTitle, sourceKind: doc.sourceKind, text: doc.text.slice(0, 2000) }));
+      await observe(job,'ResearchProgressed',{phase:'evidence-extraction',batch:needIndex+1,batches:needs.length,sourcesRead:documentCache.size,evidenceAccepted:evidence.length});
       emit(job, 'researching', `Извлекаю Evidence из ${sourceList.length} источников`, { sourceCalls, evidence:evidence.length, sources:activeSources.map(source => source.id), capability:'MODEL' });
-      const extractionId=operationId(job,'evidence-extraction');
-      await observe(job,'InferenceRequested',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction',displayInput:'model.infer("evidence-extraction")'});
-      await observe(job,'InferenceStarted',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction',displayInput:'model.infer("evidence-extraction")'});
       let extracted;
-      try { extracted = await modelJson(
-        'Ты извлекаешь Evidence из предоставленных источников. Верни JSON evidence: [{claim,quote,sourceRef,confidence,kind}], conflicts, unknowns. Используй только sourceRef из списка. claim должен быть проверяемым и не содержать новых чисел. confidence: direct|corroborated|inferred|conflicted; kind: fact|interpretation|unknown. Цитата должна быть дословным коротким фрагментом или пустой.',
-        JSON.stringify({ brief: job.brief, need, sources: sourceList }),
-        { signal: job.controller.signal, temperature: 0.1, maxTokens: 900 }
-      ); await observe(job,'InferenceCompleted',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction'}); }
-      catch(error) { await observe(job,'InferenceFailed',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction',code:error.code || 'PROVIDER_FAILURE'}); throw Object.assign(error,{code:error.code || 'PROVIDER_FAILURE'}); }
+      for(let attempt=0;attempt<2;attempt+=1){const extractionId=operationId(job,attempt?'evidence-extraction-repair':'evidence-extraction');await observe(job,'InferenceRequested',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction',displayInput:'model.infer("evidence-extraction")'});await observe(job,'InferenceStarted',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction',displayInput:'model.infer("evidence-extraction")'});try{extracted=await modelJson('Ты извлекаешь Evidence из предоставленных источников. Верни JSON evidence: [{claim,quote,sourceRef,confidence,kind}], conflicts, unknowns. Используй только sourceRef из списка. claim должен быть проверяемым и не содержать новых чисел. confidence: direct|corroborated|inferred|conflicted; kind: fact|interpretation|unknown. Цитата должна быть дословным коротким фрагментом или пустой.',JSON.stringify({brief:job.brief,need,sources:sourceList}),{signal:job.controller.signal,temperature:0.1,maxTokens:attempt?600:450,timeoutMs:job.budgets?.evidenceExtractionMs||240000});if(!Array.isArray(extracted?.evidence))throw Object.assign(new Error('Evidence extraction returned malformed structured output'),{code:'MALFORMED_RESPONSE'});await observe(job,'InferenceCompleted',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction'});break}catch(error){const malformed=error.code==='MALFORMED_RESPONSE'||error instanceof SyntaxError,code=malformed?'MALFORMED_RESPONSE':error.code||'PROVIDER_FAILURE';await observe(job,'InferenceFailed',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction',code});if(malformed&&attempt===0)continue;throw Object.assign(error,{code})}}
       const evidenceBeforeExtraction = evidence.length;
       for (const item of Array.isArray(extracted?.evidence) ? extracted.evidence : []) {
         const source = sourceList.find(candidate => candidate.ref === item.sourceRef);
@@ -215,6 +201,7 @@ export function createResearchService({ modelJson, sources = [], render, store, 
       conflicts.push(...(Array.isArray(extracted?.conflicts) ? extracted.conflicts.map(String) : []));
       unknowns.push(...(Array.isArray(extracted?.unknowns) ? extracted.unknowns.map(String) : []));
       need.dods.forEach(dod => { dod.status = dod.evidenceIds.length ? 'met' : 'unknown'; });
+      await observe(job,'ResearchProgressed',{phase:'evidence-extraction-completed',batch:needIndex+1,batches:needs.length,sourcesRead:documentCache.size,evidenceAccepted:evidence.length});
       emit(job, 'researching', `Проверяемые сигналы: ${need.title}`, { need:need.title, sourceCalls, evidence:evidence.length, sources:activeSources.map(source => source.id) });
     }
     return { evidence, conflicts: [...new Set(conflicts)], unknowns: [...new Set(unknowns)], sourceStats: stats, sourceCalls };
@@ -325,25 +312,31 @@ export function createResearchService({ modelJson, sources = [], render, store, 
       return job.result;
     } catch (error) {
       job.error = error.message;
-      if (!job.failureCause && error.code === 'PROVIDER_FAILURE') job.failureCause='provider-failure';
-      if (!job.failureCause && /ECONNREFUSED|fetch failed|model|provider|timeout/i.test(error.message)) job.failureCause='provider-failure';
-      const terminal = error.code === 'CANCELLED' || job.controller.signal.aborted ? 'cancelled' : 'failed';
+      if (job.deadlineExpired) job.failureCause='research-timeout';
+      if (!job.failureCause && error.code === 'INFERENCE_TIMEOUT') job.failureCause='inference-timeout';
+      if (!job.failureCause && error.code === 'RESEARCH_TIMEOUT') job.failureCause='research-timeout';
+      if (!job.failureCause && error.code === 'MALFORMED_RESPONSE') job.failureCause='malformed-response';
+      if (!job.failureCause && error.code === 'PROVIDER_FAILURE') job.failureCause='provider-unavailable';
+      if (!job.failureCause && /ECONNREFUSED|fetch failed|model.*unavailable|provider unavailable/i.test(error.message)) job.failureCause='provider-unavailable';
+      const terminal = !job.deadlineExpired&&(error.code === 'CANCELLED' || error.code==='ABORTED'||job.controller.signal.aborted) ? 'cancelled' : 'failed';
       emit(job, terminal, job.error);
       await store.mark?.(job.generationId, terminal, job.error).catch(() => {});
       throw error;
     }
   }
 
-  function start({ sessionId = 'default', origin, mode, temperature = 0.7, style, observe:observer, createOperationId, brief, researchOnly = false } = {}) {
+  function start({ sessionId = 'default', origin, mode, temperature = 0.7, style, observe:observer, createOperationId, brief, researchOnly = false, signal, budgets={} } = {}) {
     const current = session(sessionId);
     if (brief && typeof brief === 'object') { current.brief=cleanBrief(brief,'user',[{role:'user',content:brief.question}]); current.ready=true; }
     const selectedOrigin = origin || (current.ready && current.brief ? 'user' : 'random');
     if (selectedOrigin === 'user' && !current.brief) throw new Error('Сначала сформируйте исследовательский заказ в чате');
     const id = generationId();
     const selectedMode = mode || (selectedOrigin === 'random' ? 'random' : 'deep');
-    const job = { generationId: id, mode:selectedMode, state: 'brief', progress: null, brief: selectedOrigin === 'user' ? current.brief : null, result: null, error: null, failureCause:null, requiredContext:[], sourceFailures:0, observe:observer, createOperationId, operationOrdinal:0, events: [], listeners: new Set(), controller: new AbortController(), deadline: Date.now() + config.timeoutMs, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const job = { generationId: id, mode:selectedMode, state: 'brief', progress: null, brief: selectedOrigin === 'user' ? current.brief : null, result: null, error: null, failureCause:null, requiredContext:[], sourceFailures:0, observe:observer, createOperationId, operationOrdinal:0, events: [], listeners: new Set(), controller: new AbortController(), deadline: Date.now() + config.timeoutMs,deadlineExpired:false,budgets, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    if(signal){if(signal.aborted)job.controller.abort();else signal.addEventListener('abort',()=>job.controller.abort(),{once:true})}
     jobs.set(id, job);
-    job.done = execute(job, { origin:selectedOrigin, mode:selectedMode, brief:job.brief, temperature, style, researchOnly });
+    const deadlineTimer=setTimeout(()=>{job.deadlineExpired=true;job.controller.abort()},config.timeoutMs);
+    job.done = execute(job, { origin:selectedOrigin, mode:selectedMode, brief:job.brief, temperature, style, researchOnly }).finally(()=>clearTimeout(deadlineTimer));
     job.done.catch(() => {});
     return snapshot(job);
   }

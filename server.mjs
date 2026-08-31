@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { createProviderScheduler } from './core/provider-scheduler.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -272,10 +273,12 @@ async function persistVariationHistory(storyFingerprint, motto) {
   };
   await fs.writeFile(variationHistoryFile, JSON.stringify(payload, null, 2));
 }
-async function modelJson(system, user, { signal, temperature = 0.7, maxTokens = 1200 } = {}) {
+const modelScheduler=createProviderScheduler({providerId:process.env.LLAMA_BASE_URL||'http://127.0.0.1:8080/v1'});
+async function rawModelJson(system, user, { signal, temperature = 0.7, maxTokens = 1200, timeoutMs } = {}) {
   const base = process.env.LLAMA_BASE_URL || appConfig.llm?.base_url || 'http://127.0.0.1:8080/v1';
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Number(appConfig.llm?.timeout_ms || 300000));
+  let deadlineExpired=false;
+  const timer = setTimeout(() => {deadlineExpired=true;controller.abort()}, Number(timeoutMs || appConfig.llm?.timeout_ms || 300000));
   const abort = () => controller.abort();
   signal?.addEventListener('abort', abort, { once: true });
   try {
@@ -292,15 +295,21 @@ async function modelJson(system, user, { signal, temperature = 0.7, maxTokens = 
     if (!response.ok) throw new Error(`LLM endpoint returned HTTP ${response.status}`);
     const raw = (await response.json()).choices?.[0]?.message?.content || '';
     const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error('LLM returned no JSON object');
-    return JSON.parse(match[0]);
+    if (!match) throw Object.assign(new Error('LLM returned no JSON object'),{code:'MALFORMED_RESPONSE'});
+    try{return JSON.parse(match[0])}catch(error){throw Object.assign(error,{code:'MALFORMED_RESPONSE'})}
   } catch (error) {
-    if (controller.signal.aborted) throw new Error(signal?.aborted ? 'Исследование остановлено' : 'LLM request timed out');
+    if (controller.signal.aborted) throw Object.assign(new Error(signal?.aborted ? 'Operation cancelled' : 'LLM request timed out'),{code:signal?.aborted?'ABORTED':deadlineExpired?'INFERENCE_TIMEOUT':'PROVIDER_FAILURE'});
+    if(error.code)return Promise.reject(error);
+    if(/fetch failed|ECONNREFUSED|ENOTFOUND|HTTP 5/i.test(String(error.message)))throw Object.assign(error,{code:'PROVIDER_FAILURE'});
     throw error;
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', abort);
   }
+}
+
+async function modelJson(system,user,options={}){
+  return modelScheduler.schedule(()=>rawModelJson(system,user,options),{signal:options.signal});
 }
 async function llama(input, data, temperature) {
   input = { ...input, prompt: input.prompt || selfPrompts[Date.now() % selfPrompts.length] };
@@ -538,7 +547,7 @@ const webConfig=appConfig.research?.web || {};
 const searxngEndpoint=process.env.PO_SEARXNG_URL || webConfig.endpoint;
 if (process.env.PO_RESEARCH_WEB !== '0' && webConfig.enabled !== false) researchSources.push(
   (String(process.env.PO_SEARCH_PROVIDER || webConfig.provider || 'duckduckgo-html').toLowerCase() === 'searxng')
-    ? createSearxngSource({ endpoint:searxngEndpoint, rateLimitMs:Number(webConfig.rate_limit_ms || 1000) })
+    ? createSearxngSource({ endpoint:searxngEndpoint, rateLimitMs:Number(webConfig.rate_limit_ms || 1000),timeoutMs:Number(webConfig.timeout_ms||15000),maxResponseBytes:Number(webConfig.max_response_bytes||2097152) })
     : createWebSource({ rateLimitMs:Number(webConfig.rate_limit_ms || 1000) })
 );
 const researchService = createResearchService({

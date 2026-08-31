@@ -24,6 +24,7 @@
     "test:rerun": "node scripts/rerun-audit.mjs",
     "test:role": "node scripts/role-audit.mjs",
     "test:observation": "node scripts/observation-audit.mjs",
+    "test:reliability": "node scripts/reliability-audit.mjs",
     "app": "electron --no-sandbox electron/main.mjs",
     "launch": "bash launch.sh",
     "package": "electron-builder --linux AppImage",

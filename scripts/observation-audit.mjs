@@ -58,11 +58,14 @@ const typed=projectObservation({id:'typed',role:'product-owner',status:'complete
   {id:'s',type:'SynthesisPlan',data:{}},{id:'d',type:'DataArtifact',sourceArtifactIds:['s'],data:{}},{id:'n',type:'Narrative',sourceArtifactIds:['s','d'],data:{}}
 ],contracts:[{stageId:'narrative',inputs:['SynthesisPlan','DataArtifact'],outputs:['Narrative']} ]});
 assert.deepEqual(typed.dependencies.filter(edge=>edge.toArtifactId==='n').map(edge=>edge.relation),['frames','grounds'],'Inspector lineage retains both typed direct responsibilities');
+const rendererSource=await fs.readFile(path.join(process.cwd(),'public/ui/app.js'),'utf8');assert.doesNotMatch(rendererSource,/runs\s*\[\s*0\s*\]/,'renderer never guesses current Run from runs[0]');assert.match(rendererSource,/localStorage\.getItem\('agentsuite\.currentRunId'\)/,'current Run selection survives Electron restart');assert.match(rendererSource,/screen\('result'\)/,'terminal Run has an explicit Result transition');
 
 const apiRoot=path.join(temp,'api');const api=await createAgentSuiteApi({rootDir:apiRoot});
 const server=http.createServer((req,res)=>api.handle(req,res));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const base=`http://127.0.0.1:${server.address().port}`;
-const start=await fetch(base+'/api/runs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'custom',intent:'SSE contract',workflow:'brief'})});
+const start=await fetch(base+'/api/runs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({launchRequestId:'observation-audit-launch',mode:'custom',intent:'SSE contract',workflow:'brief'})});
 assert.equal(start.status,202);const {runId}=await start.json();
+const duplicate=await fetch(base+'/api/runs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({launchRequestId:'observation-audit-launch',mode:'custom',intent:'different body is ignored for same key',workflow:'brief'})});assert.equal(duplicate.status,200);assert.equal((await duplicate.json()).runId,runId,'same launchRequestId returns same canonical Run');
+const missingKey=await fetch(base+'/api/runs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({mode:'custom',intent:'missing key',workflow:'brief'})});assert.equal(missingKey.status,400,'launchRequestId is mandatory');
 let run;for(let i=0;i<30;i+=1){run=await fetch(base+'/api/runs/'+runId).then(r=>r.json());if(run.status==='completed')break;await new Promise(resolve=>setTimeout(resolve,10));}
 const sse=await fetch(base+`/api/runs/${runId}/events`);const text=await sse.text();
 const ids=[...text.matchAll(/^id: (.+)$/gm)].map(x=>x[1]);assert.deepEqual(ids,run.events.map(e=>e.eventId),'SSE replay follows canonical journal order');

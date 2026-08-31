@@ -31,12 +31,12 @@ async function assertPublicUrl(url) {
   return parsed;
 }
 
-async function safeFetch(url, { signal, maxBytes = 2 * 1024 * 1024, redirects = 3, timeoutMs = 15000 } = {}) {
+async function safeFetch(url, { signal, maxBytes = 2 * 1024 * 1024, redirects = 3, timeoutMs = 15000,allowPrivate=false } = {}) {
   let current = String(url);
   for (let redirect = 0; redirect <= redirects; redirect += 1) {
-    await assertPublicUrl(current);
+    if(!allowPrivate)await assertPublicUrl(current);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let deadlineExpired=false;const timer = setTimeout(() => {deadlineExpired=true;controller.abort()}, timeoutMs);
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort, { once: true });
     try {
@@ -59,7 +59,7 @@ async function safeFetch(url, { signal, maxBytes = 2 * 1024 * 1024, redirects = 
         chunks.push(value);
       }
       return { url: current, contentType: response.headers.get('content-type') || '', body: Buffer.concat(chunks).toString('utf8') };
-    } finally {
+    } catch(error){if(controller.signal.aborted)throw Object.assign(new Error(signal?.aborted?'Source operation cancelled':'Source request timed out'),{code:signal?.aborted?'ABORTED':deadlineExpired?'SOURCE_TIMEOUT':'SOURCE_UNAVAILABLE'});throw Object.assign(error,{code:error.code||'SOURCE_UNAVAILABLE'})} finally {
       clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
     }
@@ -164,7 +164,7 @@ export function createWebSource({ rateLimitMs = 1000 } = {}) {
   };
 }
 
-export function createSearxngSource({ endpoint, rateLimitMs = 1000 } = {}) {
+export function createSearxngSource({ endpoint, rateLimitMs = 1000, timeoutMs=15000,maxResponseBytes=2*1024*1024 } = {}) {
   if (!endpoint) throw new Error('SearXNG provider requires an endpoint');
   const base = new URL(endpoint);
   if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password) throw new Error('Invalid SearXNG endpoint');
@@ -173,16 +173,16 @@ export function createSearxngSource({ endpoint, rateLimitMs = 1000 } = {}) {
     const wait = Math.max(0, rateLimitMs - (Date.now() - lastRequest));
     if (wait) await new Promise(resolve => setTimeout(resolve, wait));
     lastRequest = Date.now();
-    return fetch(url, { ...options, headers: { accept:'application/json', 'user-agent':'PO-Agent-Suite-Research/1.0', ...(options.headers || {}) } });
+    return safeFetch(url,{signal:options.signal,timeoutMs,maxBytes:maxResponseBytes,allowPrivate:true});
   }
   return {
     id:'web', provider:'searxng',
     describeConfiguration() { return { id:'web', kind:'web', provider:'searxng', endpoint:base.origin, roots:[], sources:[] }; },
+    async preflight({signal}={}){try{const url=new URL('/search',base);url.searchParams.set('q','agentsuite-health');url.searchParams.set('format','json');const result=await throttled(url,{signal});JSON.parse(result.body);return{state:'healthy',provider:'searxng'}}catch(error){return{state:'unavailable',provider:'searxng',reasonCode:error.code==='SOURCE_TIMEOUT'?'source-timeout':'source-unavailable'}}},
     async search({ query, limit = 5, signal }) {
       const key=String(query).trim(); if (cache.has(key)) return cache.get(key);
       const url=new URL('/search',base); url.searchParams.set('q',key); url.searchParams.set('format','json'); url.searchParams.set('categories','general');
-      const response=await throttled(url,{signal}); if (!response.ok) throw new Error(`SearXNG HTTP ${response.status}`);
-      const payload=await response.json();
+      const response=await throttled(url,{signal});let payload;try{payload=JSON.parse(response.body)}catch{throw Object.assign(new Error('SearXNG returned malformed JSON'),{code:'MALFORMED_RESPONSE'})}
       const candidates=(Array.isArray(payload.results)?payload.results:[]).map(item=>({url:String(item.url||''),title:String(item.title||item.url||'').trim(),snippet:String(item.content||'').trim()})).filter(item=>/^https?:\/\//i.test(item.url)&&item.title).slice(0,limit);
       cache.set(key,candidates); return candidates;
     },

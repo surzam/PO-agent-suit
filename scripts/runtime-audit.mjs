@@ -27,7 +27,7 @@ try {
   assert.equal(run.status, 'completed');
   assert.equal(run.role, 'product-owner');
   assert.equal(run.workflow, 'executive-review');
-  assert.deepEqual(run.events.map(event => event.type), ['RunRequested', 'ArtifactCreated', 'BriefCreated', 'RunCompleted']);
+  assert.deepEqual(run.events.map(event => event.type), ['RunRequested','RunLaunching','RunStarted','ArtifactCreated', 'BriefCreated', 'RunCompleted']);
   assert.equal(run.artifacts.length, 1);
   const inspected = await runtime.inspect(run.id);
   assert.equal(inspected.id, run.id);
@@ -60,7 +60,7 @@ try {
   registry.register(createSlidesHarness({ slidesHtml }));
   const researchRun = await runtime.run({ intent:'Проверить research boundary', role:'product-owner', workflow:'research-presentation', stages:[{ harnessId:'brief' },{ harnessId:'research', requestEvent:'ResearchRequested' },{ harnessId:'validation', requestEvent:'ValidationRequested' },{ harnessId:'synthesis', requestEvent:'SynthesisRequested' },{ harnessId:'data', requestEvent:'DataRequested' },{ harnessId:'narrative', requestEvent:'NarrativeRequested' },{ harnessId:'slides', requestEvent:'PresentationRequested' }] });
   assert.equal(researchRun.status, 'completed');
-  assert.deepEqual(researchRun.events.map(event => event.type), ['RunRequested', 'ArtifactCreated', 'BriefCreated', 'ResearchRequested', 'ArtifactCreated', 'EvidenceCollected', 'ResearchCompleted', 'ValidationRequested', 'ArtifactCreated', 'EvidenceValidated', 'ValidationCompleted', 'SynthesisRequested', 'ArtifactCreated', 'SynthesisPlanCreated', 'SynthesisCompleted', 'DataRequested', 'ArtifactCreated', 'DataCreated', 'DataCompleted', 'NarrativeRequested', 'ArtifactCreated', 'NarrativeCreated', 'NarrativeCompleted', 'PresentationRequested', 'ArtifactCreated', 'PresentationCreated', 'PresentationCompleted', 'RunCompleted']);
+  assert.deepEqual(researchRun.events.map(event => event.type), ['RunRequested','RunLaunching','RunStarted','ArtifactCreated', 'BriefCreated', 'ResearchRequested', 'ArtifactCreated', 'EvidenceCollected', 'ResearchCompleted', 'ValidationRequested', 'ArtifactCreated', 'EvidenceValidated', 'ValidationCompleted', 'SynthesisRequested', 'ArtifactCreated', 'SynthesisPlanCreated', 'SynthesisCompleted', 'DataRequested', 'ArtifactCreated', 'DataCreated', 'DataCompleted', 'NarrativeRequested', 'ArtifactCreated', 'NarrativeCreated', 'NarrativeCompleted', 'PresentationRequested', 'ArtifactCreated', 'PresentationCreated', 'PresentationCompleted', 'RunCompleted']);
   const briefArtifact = researchRun.artifacts.find(item => item.type === 'Brief');
   const evidenceArtifact = researchRun.artifacts.find(item => item.type === 'EvidenceSet');
   const validationArtifact = researchRun.artifacts.find(item => item.type === 'ValidationReport');

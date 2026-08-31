@@ -27,16 +27,27 @@ function mime(file) {
 
 export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace') } = {}) {
   await ensureDemoFixture(rootDir);
+  const diagnosticsFile=path.join(rootDir,'diagnostics.jsonl');
   const subscribers = new Map();
-  const eventSink = event => {
+  let bootId=null;
+  const eventSink = async event => {
+    const record={timestamp:event.at,runtimeInstanceId:bootId,runId:event.runId,operationId:event.payload?.operationId||null,stageId:event.payload?.stage||null,eventCode:event.type,reasonCode:event.payload?.reasonCode||null,durationMs:Number.isFinite(event.payload?.durationMs)?event.payload.durationMs:null,provider:event.payload?.provider||null,capability:event.payload?.capability||null};
+    await fs.appendFile(diagnosticsFile,`${JSON.stringify(record)}\n`).catch(()=>{});
     for (const listener of subscribers.get(event.runId) || []) listener(event);
   };
   const execution = await createSuiteExecution({ rootDir, eventSink });
+  bootId=execution.runtimeInstanceId;
   const runtimeFor = (workflow, mode) => execution.runtime(workflow, mode).runtime;
   async function allRuns() {
     const entries = await fs.readdir(path.join(rootDir, 'runs'), { withFileTypes:true }).catch(() => []);
     return Promise.all(entries.filter(entry => entry.isDirectory()).map(entry => runtimeFor('brief').inspect(entry.name).catch(() => null))).then(items => items.filter(Boolean).sort((a,b) => b.createdAt.localeCompare(a.createdAt)));
   }
+  await runtimeFor('brief','custom').recoverOrphanedRuns();
+  const launches=new Map();
+  for(const run of await allRuns())if(run.launchRequestId)launches.set(run.launchRequestId,run.id);
+  let activeForeground=(await allRuns()).find(run=>['created','launching','running'].includes(run.status))?.id||null;
+  let admission=Promise.resolve();
+  function serializeLaunch(task){const result=admission.then(task,task);admission=result.catch(()=>{});return result}
   async function artifactById(id) {
     for (const run of await allRuns()) {
       const metadata = run.artifacts.find(item => item.id === id);
@@ -73,7 +84,7 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
       if (event.sequence <= sent) return;
       sent = event.sequence;
       res.write(`id: ${event.eventId}\nevent: runtime\ndata: ${JSON.stringify(event)}\n\n`);
-      if (event.type === 'RunCompleted' || event.type === 'RunFailed') { ended=true; res.end(); unsubscribe(); }
+      if (['RunCompleted','RunFailed','RunInterrupted','RunCancellationSettled'].includes(event.type)||(event.type==='RunCancelled'&&event.payload?.physicalOperationSettled)) { ended=true; res.end(); unsubscribe(); }
     };
     unsubscribe = subscribe(runId, write);
     run = await inspect(runId); // closes the inspect/subscribe race; sequence de-duplicates.
@@ -85,10 +96,12 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
   async function handle(req, res) {
     const url = new URL(req.url, 'http://127.0.0.1');
     if (req.method === 'GET' && url.pathname === '/api/health') return json(res,{ok:true, runtime:'agentsuite', capabilities:execution.capabilities()});
+    if(req.method==='GET'&&url.pathname==='/api/diagnostics'){const lines=await fs.readFile(diagnosticsFile,'utf8').then(text=>text.trim().split(/\r?\n/).filter(Boolean).slice(-80).map(JSON.parse)).catch(()=>[]);const lastFailure=[...lines].reverse().find(item=>['RunFailed','RunInterrupted','RunCancelled'].includes(item.eventCode));return json(res,{runtimeInstanceId:execution.runtimeInstanceId,currentRunId:activeForeground,lastFailureCode:lastFailure?.reasonCode||null,logLocation:'AgentSuite userData/workspace/diagnostics.jsonl',records:lines})}
     if (req.method === 'POST' && url.pathname === '/api/brief/turn') return json(res,{ok:true,...await execution.briefTurn(await body(req))});
     if (req.method === 'POST' && url.pathname === '/api/context') { const input=await body(req); if(!input.name||!input.content)return json(res,{error:'Context file requires name and content'},400); if(String(input.content).length>1_000_000)return json(res,{error:'Context file exceeds 1 MB'},413); return json(res,{ok:true,...execution.addContext({name:String(input.name),text:String(input.content)})},201); }
     if (req.method === 'GET' && url.pathname === '/api/runs') return json(res,{runs:await allRuns()});
     if (req.method === 'GET' && url.pathname === '/api/runtime/capabilities') return json(res,{capabilities:execution.capabilities()});
+    if(req.method==='GET'&&url.pathname==='/api/runtime/sources')return json(res,{sources:await execution.sourceStatuses()});
     if (req.method === 'GET' && url.pathname === '/api/system') return json(res,await systemSnapshot());
     if (req.method === 'GET' && url.pathname === '/api/roles') return json(res,{roles:execution.roleRegistry.list()});
     const eventRoute = url.pathname.match(/^\/api\/runs\/([^/]+)\/events$/);
@@ -100,22 +113,42 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
     const artifact = url.pathname.match(/^\/api\/artifacts\/([^/]+)$/);
     if (req.method === 'GET' && artifact) { const value=await artifactById(artifact[1]); return value?json(res,value):json(res,{error:'Artifact not found'},404); }
     if (req.method === 'POST' && url.pathname === '/api/runs') {
+      return serializeLaunch(async()=>{
       const input=await body(req); const role=input.role || 'product-owner';
+      const launchRequestId=String(input.launchRequestId||'').trim();
+      if(!/^[A-Za-z0-9._:-]{8,160}$/.test(launchRequestId))return json(res,{error:'launchRequestId is required'},400);
+      if(launches.has(launchRequestId)){const runId=launches.get(launchRequestId);return json(res,{runId,status:(await inspect(runId)).status,idempotent:true},200)}
+      if(activeForeground){const active=await inspect(activeForeground).catch(()=>null);if(active&&['created','launching','running'].includes(active.status))return json(res,{error:'ACTIVE_RUN_EXISTS',activeRunId:active.id},409);activeForeground=null}
       if (!execution.roleRegistry.get(role)) return json(res,{error:`Unknown Role: ${role}`},400);
       const mode=input.mode === 'random' ? 'random' : 'custom'; const workflow=input.workflow || 'research-presentation';
-      const {runtime,stages}=execution.runtime(workflow,mode);
-      const launched=await runtime.launch({intent:input.intent,role,workflow,stages,allowEmptyIntent:mode==='random'});
-      launched.completion.catch(error => console.error(`[AgentSuite run] ${launched.run.id}: ${error.message}`));
+      const {runtime,stages,definition}=execution.runtime(workflow,mode);
+      const launched=await runtime.launch({intent:input.intent,role,workflow,stages,allowEmptyIntent:mode==='random',launchRequestId,workflowDefinition:definition});
+      launches.set(launchRequestId,launched.run.id);activeForeground=launched.run.id;
+      launched.completion.catch(error => console.error(`[AgentSuite run] ${launched.run.id}: ${error.message}`)).finally(()=>{if(activeForeground===launched.run.id)activeForeground=null});
       return json(res,{runId:launched.run.id,status:'running'},202);
+      });
+    }
+    const cancellation=url.pathname.match(/^\/api\/runs\/([^/]+)\/cancel$/);
+    if(req.method==='POST'&&cancellation){
+      const target=await inspect(cancellation[1]).catch(()=>null);if(!target)return json(res,{error:'Run not found'},404);
+      const mode=target.events.some(event=>event.type==='IntentDiscoveryRequested')?'random':'custom';
+      const value=await execution.runtime(target.workflow,mode).runtime.cancel(target.id);
+      return json(res,{runId:value.id,status:value.status,reasonCode:value.reasonCode},202);
     }
     const rerun=url.pathname.match(/^\/api\/runs\/([^/]+)\/rerun$/);
     if (req.method === 'POST' && rerun) {
+      return serializeLaunch(async()=>{
       const input=await body(req); const source=await inspect(rerun[1]); const role=input.role || source.role;
+      const launchRequestId=String(input.launchRequestId||'').trim();if(!/^[A-Za-z0-9._:-]{8,160}$/.test(launchRequestId))return json(res,{error:'launchRequestId is required'},400);
+      if(launches.has(launchRequestId)){const runId=launches.get(launchRequestId);return json(res,{runId,status:(await inspect(runId)).status,idempotent:true},200)}
+      if(activeForeground){const active=await inspect(activeForeground).catch(()=>null);if(active&&['created','launching','running'].includes(active.status))return json(res,{error:'ACTIVE_RUN_EXISTS',activeRunId:active.id},409);activeForeground=null}
       if (!execution.roleRegistry.get(role)) return json(res,{error:`Unknown Role: ${role}`},400);
-      const workflow=input.workflow || source.workflow; const {runtime,stages}=execution.runtime(workflow,'custom');
-      const launched=await runtime.launchFork({sourceRunId:source.id,fromStage:input.from || 'synthesis',role,workflow,stages});
-      launched.completion.catch(error => console.error(`[AgentSuite rerun] ${launched.run.id}: ${error.message}`));
+      const workflow=input.workflow || source.workflow; const {runtime,stages,definition}=execution.runtime(workflow,'custom');
+      const launched=await runtime.launchFork({sourceRunId:source.id,fromStage:input.from || 'synthesis',role,workflow,stages,launchRequestId,workflowDefinition:definition});
+      launches.set(launchRequestId,launched.run.id);activeForeground=launched.run.id;
+      launched.completion.catch(error => console.error(`[AgentSuite rerun] ${launched.run.id}: ${error.message}`)).finally(()=>{if(activeForeground===launched.run.id)activeForeground=null});
       return json(res,{runId:launched.run.id,status:'running'},202);
+      });
     }
     if (req.method === 'GET') {
       const requested=url.pathname==='/'?'/index.html':url.pathname;

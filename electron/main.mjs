@@ -2,6 +2,7 @@ import { app, BrowserWindow, Menu, shell, ipcMain, nativeImage } from 'electron'
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.dirname(here);
@@ -28,13 +29,16 @@ function startServer() {
       stdio: ['ignore', 'pipe', 'pipe']
     });
     let output = '';
+    const logFile=path.join(app.getPath('userData'),'service.log');
+    const safeLog=chunk=>fs.appendFileSync(logFile,String(chunk).replace(/([?&](?:token|key|secret|password)=)[^&\s]+/gi,'$1[redacted]').slice(0,8192));
     const onData = chunk => {
       output += chunk.toString();
       const match = output.match(/http:\/\/127\.0\.0\.1:(\d+)/);
       if (match) resolve(Number(match[1]));
     };
     serverProcess.stdout.on('data', onData);
-    serverProcess.stderr.on('data', chunk => { output += chunk.toString(); });
+    serverProcess.stdout.on('data',safeLog);
+    serverProcess.stderr.on('data', chunk => { output += chunk.toString();safeLog(chunk) });
     serverProcess.once('error', reject);
     serverProcess.once('exit', code => { if (code && !output.match(/127\.0\.0\.1:\d+/)) reject(new Error(`Server exited: ${code}`)); });
   });

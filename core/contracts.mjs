@@ -1,5 +1,11 @@
 export const EVENT_TYPES = Object.freeze([
   'RunRequested',
+  'RunLaunching',
+  'RunStarted',
+  'RunNeedsContext',
+  'RunCancelled',
+  'RunCancellationSettled',
+  'RunInterrupted',
   'IntentDiscoveryRequested',
   'IntentDiscovered',
   'IntentDiscoveryInsufficientContext',
@@ -19,6 +25,7 @@ export const EVENT_TYPES = Object.freeze([
   'RoleContextLoaded',
   'BriefCreated',
   'ResearchRequested',
+  'ResearchProgressed',
   'EvidenceCollected',
   'ResearchCompleted',
   'ResearchFailed',
@@ -28,7 +35,7 @@ export const EVENT_TYPES = Object.freeze([
   'RunFailed'
 ]);
 
-export function createRun({ intent, role = 'product-owner', workflow = 'brief', parentRunId = null, reusedArtifactIds = [] } = {}) {
+export function createRun({ intent, role = 'product-owner', workflow = 'brief', parentRunId = null, reusedArtifactIds = [], runtimeInstanceId = null, launchRequestId = null } = {}) {
   const now = new Date().toISOString();
   return {
     id: `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -38,6 +45,12 @@ export function createRun({ intent, role = 'product-owner', workflow = 'brief', 
     parentRunId,
     reusedArtifactIds: [...reusedArtifactIds],
     status: 'created',
+    reasonCode: null,
+    ownerRuntimeInstanceId: runtimeInstanceId,
+    launchRequestId,
+    lastRuntimeActivityAt: now,
+    activeOperationIds: [],
+    operations: [],
     createdAt: now,
     updatedAt: now,
     events: [],

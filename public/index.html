@@ -8,7 +8,7 @@
   <main id="app" class="app-shell">
     <header class="app-head"><div class="brand"><b>PO</b> AGENT <em>SUITE</em></div><nav id="runTabs" class="run-tabs" hidden><button data-view="result" class="active">Результат</button><button data-view="observation">Наблюдение</button></nav><button id="windowControl" class="window-control" aria-label="Закрыть">×</button></header>
     <section id="start" class="screen start-screen active"><div class="start-copy"><p>БЕСКОНЕЧНЫЙ РАКУРС</p><h1>Следующая история ещё не существует</h1></div><div id="customChat" class="custom-chat" hidden><div id="messages" class="messages"><div class="message agent">Опишите вопрос. Ваш ракурс останется главным, а исследование найдёт для него проверяемую опору.</div></div><textarea id="prompt" placeholder="Что нужно исследовать?"></textarea></div></section>
-    <section id="result" class="screen result-screen"><div id="resultBody" class="result-body"><p class="eyebrow">Выполнение</p><h2 id="resultTitle">AgentSuite начинает работу</h2><p id="resultStatus">Откройте Наблюдение, чтобы увидеть Runtime.</p><div id="resultNavigation" class="result-navigation"><button id="resultObservation">Наблюдение</button><button id="newGeneration">Новая генерация</button></div><div id="resultArtifacts" class="artifact-actions"></div><button id="ctoFork" class="secondary" hidden>Посмотреть глазами CTO</button></div></section>
+    <section id="result" class="screen result-screen"><div id="resultBody" class="result-body"><p class="eyebrow">Выполнение</p><h2 id="resultTitle">AgentSuite начинает работу</h2><p id="resultStatus">Откройте Наблюдение, чтобы увидеть Runtime.</p><div id="resultNavigation" class="result-navigation"><button id="resultObservation">Наблюдение</button><button id="cancelRun" hidden>Отменить</button><button id="newGeneration">Новая генерация</button><button id="copyDiagnostics" class="secondary">Диагностика</button></div><div id="resultArtifacts" class="artifact-actions"></div><button id="ctoFork" class="secondary" hidden>Посмотреть глазами CTO</button></div></section>
     <section id="observation" class="screen observation-screen"></section>
     <section id="artifact" class="artifact-screen" hidden><button id="artifactBack" class="artifact-back" aria-label="Назад">←</button><article id="artifactContent" class="artifact-content"></article><iframe id="artifactFrame" class="artifact-frame" sandbox="allow-scripts" title="Презентация"></iframe></section>
     <footer id="startControls" class="start-controls"><div class="intent-tabs"><button id="randomMode" class="active">Случайное</button><button id="customMode">Свой вопрос</button></div><button id="generate" class="generate">ГЕНЕРИРОВАТЬ</button></footer>
@@ -16,6 +16,5 @@
   <!-- Compatibility audit markers: Research sequence · LIVE JOB · applyStyle(x.visualTheme)
        data-family="editorial" data-family="arcade" data-family="brutal" data-family="playful" data-family="diagrammatic" data-family="cinematic" -->
   <script type="module" src="/ui/app.js"></script>
-  <script type="module" src="/ui/result-controls.js"></script>
   <script>window.__PO_AGENT_UI__={version:"R13.5"};</script>
 </body></html>

@@ -12,6 +12,7 @@ import { createSlidesHarness } from '../harnesses/slides.mjs';
 import { roleRegistry } from '../roles/registry.mjs';
 import { intentHarness } from '../harnesses/intent.mjs';
 import { createIntentDiscoveryHarness } from '../harnesses/intent-discovery.mjs';
+import { workflowDefinition } from './workflows.mjs';
 
 export async function createSuiteExecution({ rootDir, eventSink = null }) {
   process.env.PO_AGENT_NO_LISTEN = '1';
@@ -34,47 +35,27 @@ export async function createSuiteExecution({ rootDir, eventSink = null }) {
   const localProductContext=[];
   for (const file of contextFiles) {
     for (const base of contextRoots) {
-      const content=await fs.readFile(path.join(base,file),'utf8').then(text=>text.slice(0,5000)).catch(()=>null);
+      const content=await fs.readFile(path.join(base,file),'utf8').then(text=>text.slice(0,2500)).catch(()=>null);
       if (content) {
         localProductContext.push({ file, content });
         break;
       }
     }
   }
+  const runtimeInstanceId=`runtime-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+  const runtimeCache=new Map();
   function setup(workflow, mode = 'custom') {
     const registry = createHarnessRegistry([briefHarness, validationHarness]);
-    const stages = [];
-    if (mode === 'random') {
-      registry.register(createIntentDiscoveryHarness({ modelJson }));
-      stages.push({ id:'intent-discovery', harnessId:'intent-discovery', requestEvent:'IntentDiscoveryRequested' });
-    } else {
-      registry.register(intentHarness);
-      stages.push({ id:'intent', harnessId:'intent' });
-    }
-    stages.push({ id:'brief', harnessId:'brief' });
-    const researchWorkflows = ['research','research-validated','research-synthesis','research-narrative','research-analysis','research-presentation'];
-    if (researchWorkflows.includes(workflow)) {
+    const definition=workflowDefinition(workflow,mode),stages=definition.stages;
+    if(mode==='random')registry.register(createIntentDiscoveryHarness({modelJson}));else registry.register(intentHarness);
+    if(stages.some(stage=>stage.id==='research')){
       registry.register(createResearchHarness({ researchService, artifactStore }));
-      stages.push({ id:'research', harnessId:'research', requestEvent:'ResearchRequested' });
-      if (workflow !== 'research') stages.push({ id:'validation', harnessId:'validation', requestEvent:'ValidationRequested' });
-      if (['research-synthesis','research-narrative','research-analysis','research-presentation'].includes(workflow)) {
-        registry.register(createSynthesisHarness({ modelJson }));
-        stages.push({ id:'synthesis', harnessId:'synthesis', requestEvent:'SynthesisRequested', config:{ requestedOutputs:['decision-memo','presentation'] } });
-      }
-      if (['research-narrative','research-analysis','research-presentation'].includes(workflow)) {
-        registry.register(createDataHarness({ dataFromEvidence }));
-        stages.push({ id:'data', harnessId:'data', requestEvent:'DataRequested' });
-      }
-      if (['research-narrative','research-analysis','research-presentation'].includes(workflow)) {
-        registry.register(createNarrativeHarness({ narrativeMarkdown }));
-        stages.push({ id:'narrative', harnessId:'narrative', requestEvent:'NarrativeRequested' });
-      }
-      if (workflow === 'research-presentation') {
-        registry.register(createSlidesHarness({ slidesHtml }));
-        stages.push({ id:'slides', harnessId:'slides', requestEvent:'PresentationRequested' });
-      }
     }
-    return { registry, stages };
+    if(stages.some(stage=>stage.id==='synthesis'))registry.register(createSynthesisHarness({modelJson}));
+    if(stages.some(stage=>stage.id==='data'))registry.register(createDataHarness({dataFromEvidence}));
+    if(stages.some(stage=>stage.id==='narrative'))registry.register(createNarrativeHarness({narrativeMarkdown}));
+    if(stages.some(stage=>stage.id==='slides'))registry.register(createSlidesHarness({slidesHtml}));
+    return { registry, stages, definition };
   }
   return {
     roleRegistry,
@@ -89,13 +70,17 @@ export async function createSuiteExecution({ rootDir, eventSink = null }) {
       ...researchSources.map(source => ({ id:source.id.toUpperCase(), label:source.id === 'local' ? 'Local files' : 'Web research' })),
       { id:'MODEL', label:'Local model' }
     ],
+    sourceStatuses: async () => Promise.all(researchSources.map(async source => ({id:source.id,provider:source.provider||source.id,...(source.preflight?await source.preflight():{state:'configured'})}))),
     contracts: (workflow, mode = 'custom') => {
       const { registry, stages } = setup(workflow, mode);
       return stages.map(stage => ({ stageId:stage.id, harnessId:stage.harnessId, ...(registry.list().find(item => item.id === stage.harnessId) || {}) }));
     },
     runtime: (workflow, mode = 'custom') => {
-      const { registry, stages } = setup(workflow, mode);
-      return { runtime:createRuntime({ rootDir, registry, roles:roleRegistry, observability:true, eventSink, defaultAllowEmptyIntent: mode === 'random', contextProvider:({ role }) => ({ availableContext:localProductContext, harnesses:registry.describe?.() || registry.list?.() || [], runtime:{ workflowStages: stages.map(stage => stage.id), artifactModel:'immutable artifacts with sourceArtifactIds' }, providerCapability:{ available:true,kind:'local-model' }, role }) }), stages };
-    }
+      const key=`${workflow}:${mode}`;if(runtimeCache.has(key))return runtimeCache.get(key);
+      const { registry, stages,definition } = setup(workflow, mode);
+      const value={ runtime:createRuntime({ rootDir, registry, roles:roleRegistry, observability:true, eventSink, runtimeInstanceId, defaultAllowEmptyIntent: mode === 'random', contextProvider:({ role }) => ({ availableContext:localProductContext, harnesses:registry.describe?.() || registry.list?.() || [], runtime:{ workflowStages: stages.map(stage => stage.id), artifactModel:'immutable artifacts with sourceArtifactIds' }, providerCapability:{ available:true,kind:'local-model' }, role }) }), stages,definition };
+      runtimeCache.set(key,value);return value;
+    },
+    runtimeInstanceId
   };
 }

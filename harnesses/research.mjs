@@ -13,12 +13,12 @@ export function createResearchHarness({ researchService, artifactStore }) {
     produces: ['EvidenceCollected', 'ResearchCompleted'],
     inputs: ['Intent', 'Brief'],
     outputs: ['EvidenceSet'],
-    async execute({ run, artifacts, config = {}, observe = async () => {}, createOperationId }) {
+    async execute({ run, artifacts, signal, config = {}, observe = async () => {}, createOperationId }) {
       const brief = artifacts.find(item => item.type === 'Brief');
       const intent = artifacts.find(item => item.type === 'Intent');
       if (!brief) throw new Error('Research Harness requires a Brief artifact');
       const sessionId = `runtime-${run.id}`;
-      const started = researchService.start({ sessionId, origin:'user', mode:'deep', brief:brief.data, temperature:config.temperature, style:config.style, observe, createOperationId, researchOnly:true });
+      const started = researchService.start({ sessionId, origin:'user', mode:'deep', brief:brief.data, temperature:config.temperature, style:config.style, observe, createOperationId, researchOnly:true,signal });
       const finished = await researchService.wait(started.generationId);
       if (finished.state === 'needs-context') {
         const cause=finished.failureCause || 'insufficient-context';

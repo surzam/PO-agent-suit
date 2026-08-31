@@ -2,6 +2,22 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createArtifact, createEvent, createRun } from './contracts.mjs';
 
+const TERMINAL_STATES=new Set(['completed','failed','cancelled','interrupted']);
+const OPERATION_START=new Set(['CapabilityRequested','CapabilityStarted','InferenceRequested','InferenceStarted','ArtifactRequested','SourceOpened']);
+const OPERATION_END=new Set(['CapabilityCompleted','CapabilityFailed','InferenceCompleted','InferenceFailed','ArtifactCompleted','ArtifactFailed','SourceRead']);
+function operationStatus(type){if(type==='SourceOpened')return'running';if(type==='SourceRead')return'completed';if(/Requested$/.test(type))return'requested';if(/Started$/.test(type))return'running';if(/Completed$/.test(type))return'completed';if(/Failed$/.test(type))return'failed';return null}
+
+function failureReason(error){
+  const code=String(error?.code||'').toLowerCase(),message=String(error?.message||error||'');
+  if(code==='abort_err'||code==='aborted'||/\babort(?:ed)?\b/i.test(message))return'user-cancelled';
+  if(code.includes('timeout')||/timed out|deadline exceeded|timeout/i.test(message))return code.includes('source')?'source-timeout':code.includes('research')?'research-timeout':'inference-timeout';
+  if(code.includes('malformed')||code.includes('invalid_provider_response')||error instanceof SyntaxError||/invalid.*json|unexpected end.*json/i.test(message))return'malformed-response';
+  if(code.includes('source'))return'source-unavailable';
+  if(code.includes('artifact')||/RequiredArtifactUnavailable/i.test(message))return'artifact-unavailable';
+  if(code.includes('provider')||/fetch failed|ECONNREFUSED|ENOTFOUND|model.*unavailable/i.test(message))return'provider-unavailable';
+  return code||'harness-failed';
+}
+
 function resultContract(result) {
   if (!result || typeof result !== 'object') throw new Error('Harness must return a result object');
   if (result.artifacts !== undefined && !Array.isArray(result.artifacts)) throw new Error('Harness result artifacts must be an array');
@@ -11,9 +27,10 @@ function resultContract(result) {
   return { artifacts: result.artifacts || [], events: result.events || [], failure: result.failure || null, halt: result.halt || null };
 }
 
-export function createRuntime({ rootDir, registry, roles = null, contextProvider = null, defaultAllowEmptyIntent = false, observability = false, eventSink = null }) {
+export function createRuntime({ rootDir, registry, roles = null, contextProvider = null, defaultAllowEmptyIntent = false, observability = false, eventSink = null, runtimeInstanceId = `runtime-${process.pid}-${Date.now()}` }) {
   if (!registry?.get) throw new Error('Runtime requires a Harness Registry');
   const runsDir = path.resolve(rootDir, 'runs');
+  const controllers=new Map();
 
   async function saveRun(run) {
     const target=path.join(runsDir,run.id,'run.json');
@@ -32,19 +49,30 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     const event = createEvent({ type, runId: run.id, payload:safePayload, sequence });
     run.events.push(event);
     run.updatedAt = event.at;
+    run.lastRuntimeActivityAt=event.at;
+    const operationId=safePayload.operationId;
+    if(operationId){
+      run.operations=Array.isArray(run.operations)?run.operations:[];let operation=run.operations.find(item=>item.operationId===operationId);
+      if(!operation){operation={operationId,runId:run.id,stageId:safePayload.stage||null,purpose:safePayload.purpose||safePayload.operation||null,startedAt:event.at,lastActivityAt:event.at,deadline:safePayload.deadline||null,status:operationStatus(type)||'requested'};run.operations.push(operation)}
+      operation.lastActivityAt=event.at;operation.status=operationStatus(type)||operation.status;if(operation.status==='timed-out'||safePayload.code==='INFERENCE_TIMEOUT'||safePayload.code==='SOURCE_TIMEOUT')operation.status='timed-out';if(safePayload.code==='ABORTED')operation.status='cancelled';
+    }
+    if(operationId&&OPERATION_START.has(type)&&!run.activeOperationIds.includes(operationId))run.activeOperationIds.push(operationId);
+    if(operationId&&OPERATION_END.has(type))run.activeOperationIds=run.activeOperationIds.filter(id=>id!==operationId);
     await fs.appendFile(path.join(runsDir, run.id, 'events.jsonl'), `${JSON.stringify(event)}\n`);
     await saveRun(run);
     if (typeof eventSink === 'function') await eventSink(event, run);
     return event;
   }
 
-  async function start({ intent, role = 'product-owner', workflow = 'brief', parentRunId = null, reusedArtifactIds = [], allowEmptyIntent = false } = {}) {
+  async function start({ intent, role = 'product-owner', workflow = 'brief', parentRunId = null, reusedArtifactIds = [], allowEmptyIntent = false, launchRequestId = null } = {}) {
     if (!allowEmptyIntent && !String(intent || '').trim()) throw new Error('A run requires an intent');
-    const run = createRun({ intent, role, workflow, parentRunId, reusedArtifactIds });
+    const run = createRun({ intent, role, workflow, parentRunId, reusedArtifactIds, runtimeInstanceId, launchRequestId });
     await fs.mkdir(path.join(runsDir, run.id, 'artifacts'), { recursive: true });
     await fs.writeFile(path.join(runsDir, run.id, 'events.jsonl'), '');
     await saveRun(run);
     await appendEvent(run, 'RunRequested', { intent: run.intent, role: run.role, workflow: run.workflow });
+    run.status='launching';
+    await appendEvent(run,'RunLaunching',{runtimeInstanceId});
     const definition = roles?.get?.(run.role) || null;
     if (definition) await appendEvent(run, 'RoleContextLoaded', { roleId:definition.id, label:definition.label || definition.id });
     return run;
@@ -61,7 +89,7 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     }
   }
 
-  async function prepareFork({ sourceRunId, fromStage, intent, role, workflow, stages = [] } = {}) {
+  async function prepareFork({ sourceRunId, fromStage, intent, role, workflow, stages = [], launchRequestId = null } = {}) {
     if (!sourceRunId) throw new Error('A rerun requires a source run');
     if (!fromStage) throw new Error('A rerun requires a starting stage');
     const sourceRun = await inspect(sourceRunId);
@@ -89,7 +117,7 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     }
     reusable.forEach(validateUpstream);
     const reusedArtifactIds = reusable.map(artifact => artifact.id);
-    const run = await start({ intent: intent || sourceRun.intent, role: role || sourceRun.role, workflow: workflow || sourceRun.workflow, parentRunId: sourceRun.id, reusedArtifactIds });
+    const run = await start({ intent: intent || sourceRun.intent, role: role || sourceRun.role, workflow: workflow || sourceRun.workflow, parentRunId: sourceRun.id, reusedArtifactIds,launchRequestId });
     const context = { artifacts: [] };
     for (const metadata of reusable) {
       const artifact = await loadArtifact(sourceRun, metadata);
@@ -100,38 +128,59 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     return { run, context, stages:selectedStages };
   }
 
-  async function execute(run, stages, context) {
+  async function verifyRequiredOutputs(run,definition={}){
+    for(const type of definition.requiredArtifacts||[]){
+      const metadata=[...run.artifacts].reverse().find(item=>item.type===type);
+      if(!metadata)throw Object.assign(new Error(`Required output is missing: ${type}`),{code:'ARTIFACT_UNAVAILABLE'});
+      const value=await loadArtifact(run,metadata);
+      if(!value||value.type!==type)throw Object.assign(new Error(`Required output cannot be read: ${type}`),{code:'ARTIFACT_UNAVAILABLE'});
+    }
+    for(const requirement of definition.requiredMaterializations||[]){
+      const metadata=[...run.artifacts].reverse().find(item=>item.type===requirement.type);
+      const value=metadata?await loadArtifact(run,metadata):null;
+      const materialized=value?.data?.[requirement.field];
+      if(materialized==null||materialized===''||(Array.isArray(materialized)&&!materialized.length))throw Object.assign(new Error(`Required materialization is unavailable: ${requirement.type}.${requirement.field}`),{code:'ARTIFACT_UNAVAILABLE'});
+    }
+  }
+
+  async function execute(run, stages, context, definition={}) {
     let activeStage = null;
+    const controller=new AbortController();controllers.set(run.id,{controller,run,cancellationRecorded:false});
     try {
       run.status = 'running';
-      await saveRun(run);
+      run.reasonCode=null;
+      await appendEvent(run,'RunStarted',{runtimeInstanceId});
       for (const stage of stages) {
+        if(controller.signal.aborted)throw Object.assign(new Error('Run cancelled by user'),{code:'ABORTED'});
         activeStage = stage;
-        const outcome = await dispatch(run, stage, context);
+        const outcome = await dispatch(run, stage, context,controller.signal);
         if (outcome.halt) {
           run.status = outcome.halt.status || 'needs-context';
-          await appendEvent(run, 'RunCompleted', { status:run.status, cause:outcome.halt.cause || null, artifacts:run.artifacts.map(item => item.id) });
+          run.reasonCode=outcome.halt.cause||'insufficient-context';
+          await appendEvent(run, 'RunNeedsContext', { reasonCode:run.reasonCode, artifacts:run.artifacts.map(item => item.id) });
           return run;
         }
       }
+      await verifyRequiredOutputs(run,definition);
       run.status = 'completed';
+      run.reasonCode=null;
       await appendEvent(run, 'RunCompleted', { artifacts: run.artifacts.map(item => item.id) });
     } catch (error) {
-      const providerUnavailable = error.code === 'PROVIDER_FAILURE' || error.code === 'provider-failure' || /fetch failed|ECONNREFUSED|ENOTFOUND|timed out|timeout|model.*unavailable/i.test(String(error.message || ''));
-      const message = providerUnavailable
-        ? 'Не удалось продолжить работу: локальная модель недоступна. Запустите модель и попробуйте снова.'
-        : error.message;
-      const code = providerUnavailable ? 'PROVIDER_UNAVAILABLE' : (error.code || 'HARNESS_FAILED');
-      run.status = 'failed';
-      await appendEvent(run, 'HarnessFailed', { harnessId: activeStage?.harnessId || 'unknown', message, code });
-      await appendEvent(run, 'RunFailed', { message, code });
+      const reasonCode=failureReason(error),cancelled=reasonCode==='user-cancelled';
+      run.status=cancelled?'cancelled':'failed';run.reasonCode=reasonCode;
+      const message=String(error.message||error);
+      if(!cancelled)await appendEvent(run, 'HarnessFailed', { harnessId: activeStage?.harnessId || 'unknown', message, code:error.code||'HARNESS_FAILED',reasonCode });
+      if(!cancelled||run.events.at(-1)?.type!=='RunCancelled')await appendEvent(run,cancelled?'RunCancelled':'RunFailed',{message,code:error.code||'HARNESS_FAILED',reasonCode,physicalOperationSettled:true});
+      else await appendEvent(run,'RunCancellationSettled',{reasonCode,physicalOperationSettled:true});
+    } finally {
+      controllers.delete(run.id);
     }
     return run;
   }
 
   async function launchFork(options = {}) {
     const prepared = await prepareFork(options);
-    const completion = execute(prepared.run, prepared.stages, prepared.context);
+    const completion = execute(prepared.run, prepared.stages, prepared.context,options.workflowDefinition||{});
     return { run:prepared.run, completion };
   }
 
@@ -155,7 +204,7 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     return value;
   }
 
-  async function dispatch(run, stage, context) {
+  async function dispatch(run, stage, context, signal=null) {
     const harness = registry.get(stage.harnessId);
     if (!harness) throw new Error(`Unknown harness: ${stage.harnessId}`);
     const trigger = stage.requestEvent ? await appendEvent(run, stage.requestEvent, { harnessId: harness.id, stage: stage.id || harness.id }) : run.events.at(-1);
@@ -174,6 +223,7 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
       role: run.role,
       roleDefinition: roles?.get?.(run.role) || null,
       workflow: run.workflow,
+      signal,
       config: stage.config || {}
     }));
     const persisted = [];
@@ -189,10 +239,10 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     return { harness, trigger, persisted, halt: result.halt || null };
   }
 
-  async function launch({ intent, role = 'product-owner', workflow = 'brief', stages = [], allowEmptyIntent = false } = {}) {
+  async function launch({ intent, role = 'product-owner', workflow = 'brief', stages = [], allowEmptyIntent = false, launchRequestId = null, workflowDefinition = {} } = {}) {
     if (!Array.isArray(stages) || !stages.length) throw new Error('A workflow requires at least one harness stage');
-    const run = await start({ intent, role, workflow, allowEmptyIntent: allowEmptyIntent || defaultAllowEmptyIntent });
-    const completion = execute(run, stages, { artifacts: [] });
+    const run = await start({ intent, role, workflow, allowEmptyIntent: allowEmptyIntent || defaultAllowEmptyIntent,launchRequestId });
+    const completion = execute(run, stages, { artifacts: [] },workflowDefinition);
     return { run, completion };
   }
 
@@ -205,5 +255,26 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     return JSON.parse(await fs.readFile(path.join(runsDir, id, 'run.json'), 'utf8'));
   }
 
-  return { start, launch, run, launchFork, fork, dispatch, inspect, runsDir };
+  async function cancel(id){
+    const run=await inspect(id);if(TERMINAL_STATES.has(run.status))return run;
+    const active=controllers.get(id),target=active?.run||run;target.status='cancelled';target.reasonCode='user-cancelled';
+    await appendEvent(target,'RunCancelled',{reasonCode:target.reasonCode,message:'Run cancelled by user',physicalOperationSettled:false});
+    if(active){active.cancellationRecorded=true;active.controller.abort()}
+    return inspect(id);
+  }
+
+  async function recoverOrphanedRuns(){
+    await fs.mkdir(runsDir,{recursive:true});
+    const entries=await fs.readdir(runsDir,{withFileTypes:true}).catch(()=>[]),recovered=[];
+    for(const entry of entries.filter(item=>item.isDirectory())){
+      let run;try{run=await inspect(entry.name)}catch{continue}
+      if(!['launching','running'].includes(run.status)||run.ownerRuntimeInstanceId===runtimeInstanceId)continue;
+      run.status='interrupted';run.reasonCode='runtime-interrupted';run.activeOperationIds=[];
+      await appendEvent(run,'RunInterrupted',{reasonCode:'runtime-interrupted',previousRuntimeInstanceId:run.ownerRuntimeInstanceId,runtimeInstanceId});
+      recovered.push(run.id);
+    }
+    return recovered;
+  }
+
+  return { start, launch, run, launchFork, fork, dispatch, inspect, cancel, recoverOrphanedRuns, verifyRequiredOutputs, runtimeInstanceId, runsDir };
 }
