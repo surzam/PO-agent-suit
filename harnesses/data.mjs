@@ -40,9 +40,11 @@ export function createDataHarness({ dataFromEvidence }) {
       const metricProvenance=(source.numericMetrics||[]).map(metric=>{const metricKey=String(metric[0]);const evidenceDerived=['evidence_count','source_count'].includes(metricKey);return{metricId:stableId('metric',{metricKey}),metricKey,kind:evidenceDerived?'derived-metric':'runtime-metadata',origin:evidenceDerived?'evidence':'runtime',evidenceIds:evidenceDerived?selectedEvidenceIds:[],validationDecisionIds:evidenceDerived?selectedEvidenceIds.map(id=>decisions.get(id)?.decisionId).filter(Boolean):[],claimIds:evidenceDerived?selectedClaimIds:[]}});
       const insightProvenance=(source.insights||[]).map((insight,insightIndex)=>({insightId:uniqueId(stableId('insight',{insight})),insightIndex,kind:'interpretation',evidenceIds:[],validationDecisionIds:[],claimIds:[]}));
       const provenance={synthesisPlanArtifactId:synthesis.id,evidenceSetArtifactId:evidenceSet.id,validationReportArtifactId:validation.id,rows:rowProvenance,metrics:metricProvenance,insights:insightProvenance};
+      const structuredRows=rowProvenance.map(ref=>({rowId:ref.rowId,values:source.rows[ref.rowIndex]}));
       return {
         artifacts: [{ type:'DataArtifact', sourceArtifactIds:[synthesis.id,evidenceSet.id,validation.id], data: {
           ...source,
+          structuredRows,
           runId: run.id,
           intentArtifactId: synthesis.data.intentArtifactId || null,
           synthesisPlanArtifactId: synthesis.id,

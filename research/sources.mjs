@@ -137,7 +137,7 @@ export function createWebSource({ rateLimitMs = 1000 } = {}) {
     return safeFetch(url, options);
   }
   return {
-    id: 'web',
+    id: 'web', operationTimeoutMs:15000,
     describeConfiguration() { return { id:'web', kind:'web', roots:[], sources:[] }; },
     async search({ query, limit = 5, signal }) {
       const key = String(query).trim();
@@ -176,7 +176,7 @@ export function createSearxngSource({ endpoint, rateLimitMs = 1000, timeoutMs=15
     return safeFetch(url,{signal:options.signal,timeoutMs,maxBytes:maxResponseBytes,allowPrivate:true});
   }
   return {
-    id:'web', provider:'searxng',
+    id:'web', provider:'searxng', operationTimeoutMs:timeoutMs,
     describeConfiguration() { return { id:'web', kind:'web', provider:'searxng', endpoint:base.origin, roots:[], sources:[] }; },
     async preflight({signal}={}){try{const url=new URL('/search',base);url.searchParams.set('q','agentsuite-health');url.searchParams.set('format','json');const result=await throttled(url,{signal});JSON.parse(result.body);return{state:'healthy',provider:'searxng'}}catch(error){return{state:'unavailable',provider:'searxng',reasonCode:error.code==='SOURCE_TIMEOUT'?'source-timeout':'source-unavailable'}}},
     async search({ query, limit = 5, signal }) {
@@ -187,7 +187,7 @@ export function createSearxngSource({ endpoint, rateLimitMs = 1000, timeoutMs=15
       cache.set(key,candidates); return candidates;
     },
     async fetch(candidate,{signal}={}) {
-      const result=await safeFetch(candidate.url,{signal}); const page=cleanPage(result.body,result.url);
+      const result=await safeFetch(candidate.url,{signal,timeoutMs}); const page=cleanPage(result.body,result.url);
       const sourceId=`web:${crypto.createHash('sha256').update(candidate.url).digest('hex').slice(0,16)}`;
       return { sourceId, sourceUri:candidate.url, sourceTitle:page.title||candidate.title, sourceKind:'web', text:page.text||candidate.snippet };
     }

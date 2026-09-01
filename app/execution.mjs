@@ -13,6 +13,7 @@ import { roleRegistry } from '../roles/registry.mjs';
 import { intentHarness } from '../harnesses/intent.mjs';
 import { createIntentDiscoveryHarness } from '../harnesses/intent-discovery.mjs';
 import { workflowDefinition } from './workflows.mjs';
+import { validatePresentationMaterialization } from '../harnesses/presentation-validation.mjs';
 
 export async function createSuiteExecution({ rootDir, eventSink = null }) {
   process.env.PO_AGENT_NO_LISTEN = '1';
@@ -78,7 +79,7 @@ export async function createSuiteExecution({ rootDir, eventSink = null }) {
     runtime: (workflow, mode = 'custom') => {
       const key=`${workflow}:${mode}`;if(runtimeCache.has(key))return runtimeCache.get(key);
       const { registry, stages,definition } = setup(workflow, mode);
-      const value={ runtime:createRuntime({ rootDir, registry, roles:roleRegistry, observability:true, eventSink, runtimeInstanceId, defaultAllowEmptyIntent: mode === 'random', contextProvider:({ role }) => ({ availableContext:localProductContext, harnesses:registry.describe?.() || registry.list?.() || [], runtime:{ workflowStages: stages.map(stage => stage.id), artifactModel:'immutable artifacts with sourceArtifactIds' }, providerCapability:{ available:true,kind:'local-model' }, role }) }), stages,definition };
+      const value={ runtime:createRuntime({ rootDir, registry, roles:roleRegistry, observability:true, eventSink, artifactValidators:{Presentation:validatePresentationMaterialization}, runtimeInstanceId, defaultAllowEmptyIntent: mode === 'random', contextProvider:({ role }) => ({ availableContext:localProductContext, harnesses:registry.describe?.() || registry.list?.() || [], runtime:{ workflowStages: stages.map(stage => stage.id), artifactModel:'immutable artifacts with sourceArtifactIds' }, providerCapability:{ available:true,kind:'local-model' }, role }) }), stages,definition };
       runtimeCache.set(key,value);return value;
     },
     runtimeInstanceId

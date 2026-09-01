@@ -59,7 +59,7 @@ try {
   registry.register(createDataHarness({ dataFromEvidence }));
   registry.register(createSlidesHarness({ slidesHtml }));
   const researchRun = await runtime.run({ intent:'Проверить research boundary', role:'product-owner', workflow:'research-presentation', stages:[{ harnessId:'brief' },{ harnessId:'research', requestEvent:'ResearchRequested' },{ harnessId:'validation', requestEvent:'ValidationRequested' },{ harnessId:'synthesis', requestEvent:'SynthesisRequested' },{ harnessId:'data', requestEvent:'DataRequested' },{ harnessId:'narrative', requestEvent:'NarrativeRequested' },{ harnessId:'slides', requestEvent:'PresentationRequested' }] });
-  assert.equal(researchRun.status, 'completed');
+  assert.equal(researchRun.status, 'completed',JSON.stringify(researchRun.events.slice(-3)));
   assert.deepEqual(researchRun.events.map(event => event.type), ['RunRequested','RunLaunching','RunStarted','ArtifactCreated', 'BriefCreated', 'ResearchRequested', 'ArtifactCreated', 'EvidenceCollected', 'ResearchCompleted', 'ValidationRequested', 'ArtifactCreated', 'EvidenceValidated', 'ValidationCompleted', 'SynthesisRequested', 'ArtifactCreated', 'SynthesisPlanCreated', 'SynthesisCompleted', 'DataRequested', 'ArtifactCreated', 'DataCreated', 'DataCompleted', 'NarrativeRequested', 'ArtifactCreated', 'NarrativeCreated', 'NarrativeCompleted', 'PresentationRequested', 'ArtifactCreated', 'PresentationCreated', 'PresentationCompleted', 'RunCompleted']);
   const briefArtifact = researchRun.artifacts.find(item => item.type === 'Brief');
   const evidenceArtifact = researchRun.artifacts.find(item => item.type === 'EvidenceSet');
@@ -96,6 +96,7 @@ try {
   const materialize=async items=>(await stableDataHarness.execute({run:{id:'stable-run'},artifacts:[stablePlan,{id:'stable-evidence',type:'EvidenceSet',data:{items,metadata:{sourceCalls:2}}},stableValidation]})).artifacts[0].data;
   const orderedData=await materialize(facts),reorderedData=await materialize([...facts].reverse());
   assert.deepEqual(new Map(orderedData.provenance.rows.map(row=>[row.evidenceIds[0],row.rowId])),new Map(reorderedData.provenance.rows.map(row=>[row.evidenceIds[0],row.rowId])),'Data row identity survives reorder');
+  assert.deepEqual(new Map(orderedData.provenance.metrics.map(metric=>[metric.metricKey,metric.metricId])),new Map(reorderedData.provenance.metrics.map(metric=>[metric.metricKey,metric.metricId])),'metric identity survives materialization reorder');
   assert.equal(reorderedData.provenance.rows.find(row=>row.evidenceIds[0]==='E2').validationDecisionIds[0],'validation:E2','validation decisions survive unchanged into Data selection');
   const presentationFile = path.join(temp, 'runs', researchRun.id, 'artifacts', presentationArtifact.file.split('/').at(-1));
   const presentation = JSON.parse(await fs.readFile(presentationFile, 'utf8'));
@@ -103,6 +104,7 @@ try {
   assert.equal(presentation.data.dataArtifactId, dataArtifactMeta.id);
   assert.equal(presentation.data.slides[0].claimIds[0], 'C001');
   assert.equal(presentation.data.slides[0].evidenceIds[0], 'E001');
+  assert.ok(presentation.data.slides[0].dataRefs.rowIds.includes(dataArtifact.data.rowProvenance[0].rowId),'slide lineage references stable Data row IDs');
   assert.match(presentation.data.html, /<section|slide/);
   const narrativeInput = {
     id:'narrative-input',
@@ -117,7 +119,7 @@ try {
   assert.doesNotMatch(narrativeResult.artifacts[0].data.content,/Скрытый факт/,'Narrative cannot recover raw EvidenceSet through an adapter');
   const slideInput = { id:'synthesis-slide-input', type:'SynthesisPlan', data:{ objective:'Проверить слайды', audience:'PO', keyClaims:[{ id:'C001', claim:'Поддержанный тезис', evidenceIds:['E001'], kind:'evidence-backed' }], uncertainties:[], requestedOutputs:[] } };
   const dataInput = { id:'data-slide-input', type:'DataArtifact', data:{ columns:['Evidence ID','Claim'],rows:[['E001','Поддержанный тезис']],provenance:{rows:[{rowId:'row-slide',rowIndex:0,kind:'fact',evidenceIds:['E001'],claimIds:['C001']}],metrics:[],insights:[]} } };
-  const slideResult = await createSlidesHarness({ slidesHtml: async () => '<section>slide</section>' }).execute({ run:{ id:'run-slide-test' }, artifacts:[slideInput, dataInput], config:{} });
+  const slideResult = await createSlidesHarness({ slidesHtml }).execute({ run:{ id:'run-slide-test' }, artifacts:[slideInput, dataInput], config:{} });
   assert.deepEqual(slideResult.artifacts[0].sourceArtifactIds, [slideInput.id, dataInput.id]);
   await assert.rejects(() => createSlidesHarness({ slidesHtml }).execute({ run:{ id:'run-slide-missing' }, artifacts:[slideInput], config:{} }), /requires a DataArtifact/);
   await assert.rejects(() => createSlidesHarness({ slidesHtml: () => { throw new Error('renderer unavailable'); } }).execute({ run:{ id:'run-slide-failure' }, artifacts:[slideInput, dataInput], config:{} }), /renderer unavailable/);

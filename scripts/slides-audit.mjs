@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
+import { validatePresentationMaterialization } from '../harnesses/presentation-validation.mjs';
 
 process.env.PO_AGENT_NO_LISTEN = '1';
 const { slidesHtml, designFamily, templateTheme, templateVisualTheme, mottoSimilarity } = await import('../server.mjs');
@@ -24,6 +25,7 @@ const appHtml = fs.readFileSync(new URL('../public/index.html', import.meta.url)
 
 for (const slug of slugs) {
   const html = slidesHtml(plan, { styleId:slug, generationId:`audit-${slug}` }, data);
+  assert.equal(validatePresentationMaterialization({data:{html,slides:plan.scenes}}).slideCount,plan.scenes.length,`${slug}: structural contract`);
   const uiTheme = templateVisualTheme(slug, `audit-${slug}`);
   themes.add(templateTheme(slug)); families.add(designFamily(slug));
   assert.equal(uiTheme.styleId, slug, `${slug}: UI receives current template`);
@@ -48,6 +50,15 @@ deckDom.window.document.getElementById('deckNext').click();
 assert.equal([...deckDom.window.document.querySelectorAll('.slide')].findIndex(item=>item.classList.contains('active')),1,'clicking Next reveals the second slide');
 assert.equal(deckDom.window.document.getElementById('deckPosition').textContent,`2 / ${plan.scenes.length}`,'click navigation updates the visible slide counter');
 deckDom.window.close();
+
+const invalidCases=[
+  ['missing root',fallbackDeck.replace('class="deck-viewport"','class="missing-viewport"')],
+  ['zero slides',fallbackDeck.replace(/<section class="slide[\s\S]*?<\/section>/g,'')],
+  ['missing navigation',fallbackDeck.replace('id="deckNext"','id="missingNext"')],
+  ['missing bootstrap',fallbackDeck.replace("function go(next)","function missingGo(next)")],
+  ['corrupt theme',fallbackDeck.replace(/--bg:[^;]+;/,'--bg:undefined;')]
+];
+for(const [label,html] of invalidCases)assert.throws(()=>validatePresentationMaterialization({data:{html,slides:plan.scenes}}),/Presentation materialization is invalid/,label);
 
 assert.equal(slugs.length, 35, 'full template library');
 assert.equal(themes.size, slugs.length, 'every template has a unique theme token set');

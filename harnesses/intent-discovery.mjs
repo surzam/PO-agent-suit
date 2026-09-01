@@ -17,9 +17,10 @@ export function createIntentDiscoveryHarness({ modelJson }) {
         const input=JSON.stringify({ role, roleDefinition, availableContext: available, artifacts: artifacts.map(a => ({ type: a.type, id: a.id })), runtime: context.runtime || {}, providerCapability: context.providerCapability || { available: true } });
         for(let attempt=0;attempt<2;attempt+=1){
           operationId=createOperationId(attempt?'inference-repair':'inference');
-          await observe('InferenceRequested', { operationId, provider:'model', capability:'MODEL', purpose:'intent-discovery', displayInput:'model.infer("intent-discovery")' });
-          await observe('InferenceStarted', { operationId, provider:'model', capability:'MODEL', purpose:'intent-discovery', displayInput:'model.infer("intent-discovery")' });
-          try{value=await modelJson(prompt,input,{signal,purpose:'intent-discovery',temperature:attempt?0.15:0.45,maxTokens:attempt?600:450,timeoutMs:180000});if(value?.status!=='insufficient-context'&&!String(value?.question||'').trim())throw Object.assign(new Error('Intent Discovery returned malformed structured output'),{code:'MALFORMED_RESPONSE'});await observe('InferenceCompleted',{operationId,provider:'model',capability:'MODEL',purpose:'intent-discovery',status:value?.status||'discovered'});break}
+          const timeoutMs=180000,deadline=new Date(Date.now()+timeoutMs).toISOString();
+          await observe('InferenceRequested', { operationId, provider:'model', capability:'MODEL', purpose:'intent-discovery', displayInput:'model.infer("intent-discovery")',deadline });
+          await observe('InferenceStarted', { operationId, provider:'model', capability:'MODEL', purpose:'intent-discovery', displayInput:'model.infer("intent-discovery")',deadline });
+          try{value=await modelJson(prompt,input,{signal,purpose:'intent-discovery',temperature:attempt?0.15:0.45,maxTokens:attempt?600:450,timeoutMs});if(value?.status!=='insufficient-context'&&!String(value?.question||'').trim())throw Object.assign(new Error('Intent Discovery returned malformed structured output'),{code:'MALFORMED_RESPONSE'});await observe('InferenceCompleted',{operationId,provider:'model',capability:'MODEL',purpose:'intent-discovery',status:value?.status||'discovered'});break}
           catch(error){const code=providerCode(error);await observe('InferenceFailed',{operationId,provider:'model',capability:'MODEL',purpose:'intent-discovery',code});if(code==='MALFORMED_RESPONSE'&&attempt===0)continue;throw Object.assign(error,{code})}
         }
         const status = value?.status === 'insufficient-context' ? 'insufficient-context' : 'discovered';

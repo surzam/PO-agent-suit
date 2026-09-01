@@ -78,5 +78,19 @@ let run;for(let i=0;i<30;i+=1){run=await fetch(base+'/api/runs/'+runId).then(r=>
 const sse=await fetch(base+`/api/runs/${runId}/events`);const text=await sse.text();
 const ids=[...text.matchAll(/^id: (.+)$/gm)].map(x=>x[1]);assert.deepEqual(ids,run.events.map(e=>e.eventId),'SSE replay follows canonical journal order');
 const after=run.events.at(-2).eventId;const tail=await fetch(base+`/api/runs/${runId}/events?after=${encodeURIComponent(after)}`).then(r=>r.text());assert.equal((tail.match(/^id:/gm)||[]).length,1,'reconnect resumes after eventId');
-server.close();await fs.rm(temp,{recursive:true,force:true});
+const diagnostics=await fetch(base+'/api/diagnostics').then(r=>r.json());assert.equal(diagnostics.lastCompletedRunId,runId);assert.ok(diagnostics.records.every(record=>record.eventId&&Number.isInteger(record.sequence)),'safe diagnostics retain canonical event identity');
+server.close();
+
+async function admissionServer(name){const instance=await createAgentSuiteApi({rootDir:path.join(temp,name)}),listener=http.createServer((req,res)=>instance.handle(req,res));await new Promise(resolve=>listener.listen(0,'127.0.0.1',resolve));return{listener,base:`http://127.0.0.1:${listener.address().port}`}}
+async function waitForTerminal(baseUrl,runId){for(let attempt=0;attempt<100;attempt+=1){const value=await fetch(`${baseUrl}/api/runs/${runId}`).then(response=>response.json());if(['completed','failed','cancelled','interrupted','needs-context'].includes(value.status))return value;await new Promise(resolve=>setTimeout(resolve,10))}throw new Error(`Run ${runId} did not settle`)}
+const sameAdmission=await admissionServer('same-admission');
+const sameBody=JSON.stringify({launchRequestId:'same-concurrent-launch',mode:'custom',intent:'same admission',workflow:'brief'});
+const sameResponses=await Promise.all([fetch(sameAdmission.base+'/api/runs',{method:'POST',headers:{'content-type':'application/json'},body:sameBody}),fetch(sameAdmission.base+'/api/runs',{method:'POST',headers:{'content-type':'application/json'},body:sameBody})]);
+assert.deepEqual(sameResponses.map(response=>response.status).sort(),[200,202]);const sameValues=await Promise.all(sameResponses.map(response=>response.json()));assert.equal(new Set(sameValues.map(value=>value.runId)).size,1,'concurrent identical launch keys resolve to one Run');await waitForTerminal(sameAdmission.base,sameValues[0].runId);sameAdmission.listener.close();
+
+const competingAdmission=await admissionServer('competing-admission');
+const competingResponses=await Promise.all(['launch-one-key','launch-two-key'].map((launchRequestId,index)=>fetch(competingAdmission.base+'/api/runs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({launchRequestId,mode:'custom',intent:`competing ${index}`,workflow:'brief'})})));
+assert.deepEqual(competingResponses.map(response=>response.status).sort(),[202,409]);const competingValues=await Promise.all(competingResponses.map(async response=>({status:response.status,value:await response.json()}))),conflict=competingValues.find(item=>item.status===409).value,accepted=competingValues.find(item=>item.status===202).value;assert.equal(conflict.error,'ACTIVE_RUN_EXISTS');assert.equal(conflict.activeRunId,accepted.runId);await waitForTerminal(competingAdmission.base,accepted.runId);competingAdmission.listener.close();
+
+await fs.rm(temp,{recursive:true,force:true});
 console.log('observation audit: launch/run engine · monotonic journal · reload projection · SSE replay/reconnect · PASS');

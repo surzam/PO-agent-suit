@@ -27,7 +27,7 @@ function resultContract(result) {
   return { artifacts: result.artifacts || [], events: result.events || [], failure: result.failure || null, halt: result.halt || null };
 }
 
-export function createRuntime({ rootDir, registry, roles = null, contextProvider = null, defaultAllowEmptyIntent = false, observability = false, eventSink = null, runtimeInstanceId = `runtime-${process.pid}-${Date.now()}` }) {
+export function createRuntime({ rootDir, registry, roles = null, contextProvider = null, defaultAllowEmptyIntent = false, observability = false, eventSink = null, artifactValidators = {}, runtimeInstanceId = `runtime-${process.pid}-${Date.now()}` }) {
   if (!registry?.get) throw new Error('Runtime requires a Harness Registry');
   const runsDir = path.resolve(rootDir, 'runs');
   const controllers=new Map();
@@ -45,6 +45,12 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     for (const key of ['operationId','producedByOperationId']) {
       if (safePayload[key] && !/^[\p{L}\p{N}._:-]{1,200}$/u.test(String(safePayload[key]))) delete safePayload[key];
     }
+    run.operations=Array.isArray(run.operations)?run.operations:[];
+    const existingOperation=safePayload.operationId?run.operations.find(item=>item.operationId===safePayload.operationId):null;
+    if(existingOperation&&OPERATION_END.has(type)&&existingOperation.startedAt){
+      const durationMs=Date.now()-Date.parse(existingOperation.startedAt);
+      if(Number.isFinite(durationMs)&&durationMs>=0)safePayload.durationMs=durationMs;
+    }
     const sequence = Number(run.events.at(-1)?.sequence || 0) + 1;
     const event = createEvent({ type, runId: run.id, payload:safePayload, sequence });
     run.events.push(event);
@@ -52,9 +58,9 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     run.lastRuntimeActivityAt=event.at;
     const operationId=safePayload.operationId;
     if(operationId){
-      run.operations=Array.isArray(run.operations)?run.operations:[];let operation=run.operations.find(item=>item.operationId===operationId);
+      let operation=existingOperation;
       if(!operation){operation={operationId,runId:run.id,stageId:safePayload.stage||null,purpose:safePayload.purpose||safePayload.operation||null,startedAt:event.at,lastActivityAt:event.at,deadline:safePayload.deadline||null,status:operationStatus(type)||'requested'};run.operations.push(operation)}
-      operation.lastActivityAt=event.at;operation.status=operationStatus(type)||operation.status;if(operation.status==='timed-out'||safePayload.code==='INFERENCE_TIMEOUT'||safePayload.code==='SOURCE_TIMEOUT')operation.status='timed-out';if(safePayload.code==='ABORTED')operation.status='cancelled';
+      operation.lastActivityAt=event.at;operation.deadline=operation.deadline||safePayload.deadline||null;operation.status=operationStatus(type)||operation.status;if(Number.isFinite(safePayload.durationMs))operation.durationMs=safePayload.durationMs;if(operation.status==='timed-out'||safePayload.code==='INFERENCE_TIMEOUT'||safePayload.code==='SOURCE_TIMEOUT')operation.status='timed-out';if(safePayload.code==='ABORTED')operation.status='cancelled';
     }
     if(operationId&&OPERATION_START.has(type)&&!run.activeOperationIds.includes(operationId))run.activeOperationIds.push(operationId);
     if(operationId&&OPERATION_END.has(type))run.activeOperationIds=run.activeOperationIds.filter(id=>id!==operationId);
@@ -134,12 +140,14 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
       if(!metadata)throw Object.assign(new Error(`Required output is missing: ${type}`),{code:'ARTIFACT_UNAVAILABLE'});
       const value=await loadArtifact(run,metadata);
       if(!value||value.type!==type)throw Object.assign(new Error(`Required output cannot be read: ${type}`),{code:'ARTIFACT_UNAVAILABLE'});
+      if(typeof artifactValidators[type]==='function')artifactValidators[type](value);
     }
     for(const requirement of definition.requiredMaterializations||[]){
       const metadata=[...run.artifacts].reverse().find(item=>item.type===requirement.type);
       const value=metadata?await loadArtifact(run,metadata):null;
       const materialized=value?.data?.[requirement.field];
       if(materialized==null||materialized===''||(Array.isArray(materialized)&&!materialized.length))throw Object.assign(new Error(`Required materialization is unavailable: ${requirement.type}.${requirement.field}`),{code:'ARTIFACT_UNAVAILABLE'});
+      if(value&&typeof artifactValidators[requirement.type]==='function')artifactValidators[requirement.type](value);
     }
   }
 

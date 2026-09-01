@@ -31,7 +31,7 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
   const subscribers = new Map();
   let bootId=null;
   const eventSink = async event => {
-    const record={timestamp:event.at,runtimeInstanceId:bootId,runId:event.runId,operationId:event.payload?.operationId||null,stageId:event.payload?.stage||null,eventCode:event.type,reasonCode:event.payload?.reasonCode||null,durationMs:Number.isFinite(event.payload?.durationMs)?event.payload.durationMs:null,provider:event.payload?.provider||null,capability:event.payload?.capability||null};
+    const record={timestamp:event.at,runtimeInstanceId:bootId,runId:event.runId,eventId:event.eventId,sequence:event.sequence,operationId:event.payload?.operationId||null,stageId:event.payload?.stage||null,eventCode:event.type,reasonCode:event.payload?.reasonCode||null,durationMs:Number.isFinite(event.payload?.durationMs)?event.payload.durationMs:null,provider:event.payload?.provider||null,capability:event.payload?.capability||null};
     await fs.appendFile(diagnosticsFile,`${JSON.stringify(record)}\n`).catch(()=>{});
     for (const listener of subscribers.get(event.runId) || []) listener(event);
   };
@@ -107,7 +107,7 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
   async function handle(req, res) {
     const url = new URL(req.url, 'http://127.0.0.1');
     if (req.method === 'GET' && url.pathname === '/api/health') return json(res,{ok:true, runtime:'agentsuite', capabilities:execution.capabilities()});
-    if(req.method==='GET'&&url.pathname==='/api/diagnostics'){const lines=await fs.readFile(diagnosticsFile,'utf8').then(text=>text.trim().split(/\r?\n/).filter(Boolean).slice(-80).map(JSON.parse)).catch(()=>[]);const lastFailure=[...lines].reverse().find(item=>['RunFailed','RunInterrupted','RunCancelled'].includes(item.eventCode));return json(res,{runtimeInstanceId:execution.runtimeInstanceId,currentRunId:activeForeground,lastFailureCode:lastFailure?.reasonCode||null,logLocation:'AgentSuite userData/workspace/diagnostics.jsonl',records:lines})}
+    if(req.method==='GET'&&url.pathname==='/api/diagnostics'){const lines=await fs.readFile(diagnosticsFile,'utf8').then(text=>text.trim().split(/\r?\n/).filter(Boolean).slice(-80).map(JSON.parse)).catch(()=>[]),runs=await allRuns();const lastFailure=[...lines].reverse().find(item=>['RunFailed','RunInterrupted','RunCancelled'].includes(item.eventCode));return json(res,{runtimeInstanceId:execution.runtimeInstanceId,currentRunId:activeForeground,activeRunId:activeForeground,lastRunId:runs[0]?.id||null,lastCompletedRunId:runs.find(run=>run.status==='completed')?.id||null,lastFailedRunId:runs.find(run=>['failed','interrupted','cancelled'].includes(run.status))?.id||null,lastFailureCode:lastFailure?.reasonCode||null,logLocation:'AgentSuite userData/workspace/diagnostics.jsonl',records:lines})}
     if (req.method === 'POST' && url.pathname === '/api/brief/turn') return json(res,{ok:true,...await execution.briefTurn(await body(req))});
     if (req.method === 'POST' && url.pathname === '/api/context') { const input=await body(req); if(!input.name||!input.content)return json(res,{error:'Context file requires name and content'},400); if(String(input.content).length>1_000_000)return json(res,{error:'Context file exceeds 1 MB'},413); return json(res,{ok:true,...execution.addContext({name:String(input.name),text:String(input.content)})},201); }
     if (req.method === 'GET' && url.pathname === '/api/runs') return json(res,{runs:await allRuns()});

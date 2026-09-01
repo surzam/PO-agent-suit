@@ -6,10 +6,18 @@ function provenanceRows(data = {}) {
   return data.provenance?.rows || data.rowProvenance || [];
 }
 
+function rowByStableId(data, ref) {
+  const stable=(data.structuredRows||[]).find(item=>String(item?.rowId)===String(ref.rowId));
+  if(stable&&Array.isArray(stable.values))return stable.values;
+  // Backward compatibility for artifacts created before stable row values were
+  // persisted. New artifacts never depend on this presentation-order fallback.
+  return rows(data)[Number(ref.rowIndex)];
+}
+
 export function evidenceFromDataArtifact(dataArtifact) {
   const data = dataArtifact?.data || {};
   return provenanceRows(data).flatMap(ref => {
-    const row = rows(data)[Number(ref.rowIndex)];
+    const row = rowByStableId(data,ref);
     const evidenceId = ref.evidenceIds?.[0];
     if (!row || !evidenceId || ref.kind && ref.kind !== 'fact') return [];
     return [{
