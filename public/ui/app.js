@@ -171,9 +171,9 @@ async function openArtifact(id){
     if(!response.ok)throw Error(a.error||'Artifact unavailable');
     $('#artifactTitle').textContent=outputLabels[a.type]||'Результат';content.style.display='block';
     if(a.type==='Presentation'){content.style.display='none';frame.style.display='block';frame.srcdoc=presentationHtml(a.data?.html)||'<main style="color:white;padding:3rem">Презентация не содержит HTML.</main>';frame.onload=()=>frame.contentWindow?.focus()}
-    else if(a.type==='DataArtifact')content.innerHTML=`<h1>${esc(a.data.title||'Таблица')}</h1><table><thead><tr>${(a.data.columns||[]).map(value=>`<th>${esc(value)}</th>`).join('')}</tr></thead><tbody>${(a.data.rows||[]).map(row=>`<tr>${row.map(value=>`<td>${esc(value)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+    else if(a.type==='DataArtifact'){content.className='artifact-content data-surface';content.innerHTML=`<h1>${esc(a.data.title||'Таблица')}</h1><table><thead><tr>${(a.data.columns||[]).map(value=>`<th>${esc(value)}</th>`).join('')}</tr></thead><tbody>${(a.data.rows||[]).map(row=>`<tr>${row.map(value=>`<td>${esc(value)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;}
     else if(a.type==='InteractiveResult'){content.className='artifact-content interactive-result';renderInteractiveResult(content,a,{onEvidence:evidenceId=>showEvidence(content,evidenceId).catch(error=>alert(error.message))})}
-    else content.innerHTML=markdown(a.data?.content||'');
+    else {content.className='artifact-content narrative-surface';content.innerHTML=markdown(a.data?.content||'');}
   }catch(error){
     $('#artifactTitle').textContent='Не удалось открыть результат';content.style.display='block';
     content.innerHTML=`<h1>Не удалось открыть ${id&&run?.artifacts?.find(item=>item.id===id)?.type==='InteractiveResult'?'интерактивный результат':'результат'}</h1><p>${esc(error.message)}</p><button class="artifact-inline-back">Вернуться к результату</button>`;

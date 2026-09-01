@@ -16,7 +16,7 @@ import { createSlidesHarness } from '../harnesses/slides.mjs';
 import { dataFromEvidence } from '../research/service.mjs';
 
 process.env.PO_AGENT_NO_LISTEN = '1';
-const { narrativeMarkdown, slidesHtml } = await import('../server.mjs');
+const { narrativeMarkdown, slidesHtml, resolvePresentationStyle } = await import('../server.mjs');
 
 const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'agentsuite-runtime-'));
 try {
@@ -57,7 +57,7 @@ try {
   registry.register(createSynthesisHarness({ modelJson:legacyModel }));
   registry.register(createNarrativeHarness({ narrativeMarkdown }));
   registry.register(createDataHarness({ dataFromEvidence }));
-  registry.register(createSlidesHarness({ slidesHtml }));
+  registry.register(createSlidesHarness({ slidesHtml, resolvePresentationStyle }));
   const researchRun = await runtime.run({ intent:'Проверить research boundary', role:'product-owner', workflow:'research-presentation', stages:[{ harnessId:'brief' },{ harnessId:'research', requestEvent:'ResearchRequested' },{ harnessId:'validation', requestEvent:'ValidationRequested' },{ harnessId:'synthesis', requestEvent:'SynthesisRequested' },{ harnessId:'data', requestEvent:'DataRequested' },{ harnessId:'narrative', requestEvent:'NarrativeRequested' },{ harnessId:'slides', requestEvent:'PresentationRequested' }] });
   assert.equal(researchRun.status, 'completed',JSON.stringify(researchRun.events.slice(-3)));
   assert.deepEqual(researchRun.events.map(event => event.type), ['RunRequested','RunLaunching','RunStarted','ArtifactCreated', 'BriefCreated', 'ResearchRequested', 'ArtifactCreated', 'EvidenceCollected', 'ResearchCompleted', 'ValidationRequested', 'ArtifactCreated', 'EvidenceValidated', 'ValidationCompleted', 'SynthesisRequested', 'ArtifactCreated', 'SynthesisPlanCreated', 'SynthesisCompleted', 'DataRequested', 'ArtifactCreated', 'DataCreated', 'DataCompleted', 'NarrativeRequested', 'ArtifactCreated', 'NarrativeCreated', 'NarrativeCompleted', 'PresentationRequested', 'ArtifactCreated', 'PresentationCreated', 'PresentationCompleted', 'RunCompleted']);
@@ -119,10 +119,10 @@ try {
   assert.doesNotMatch(narrativeResult.artifacts[0].data.content,/Скрытый факт/,'Narrative cannot recover raw EvidenceSet through an adapter');
   const slideInput = { id:'synthesis-slide-input', type:'SynthesisPlan', data:{ objective:'Проверить слайды', audience:'PO', keyClaims:[{ id:'C001', claim:'Поддержанный тезис', evidenceIds:['E001'], kind:'evidence-backed' }], uncertainties:[], requestedOutputs:[] } };
   const dataInput = { id:'data-slide-input', type:'DataArtifact', data:{ columns:['Evidence ID','Claim'],rows:[['E001','Поддержанный тезис']],provenance:{rows:[{rowId:'row-slide',rowIndex:0,kind:'fact',evidenceIds:['E001'],claimIds:['C001']}],metrics:[],insights:[]} } };
-  const slideResult = await createSlidesHarness({ slidesHtml }).execute({ run:{ id:'run-slide-test' }, artifacts:[slideInput, dataInput], config:{} });
+  const slideResult = await createSlidesHarness({ slidesHtml, resolvePresentationStyle }).execute({ run:{ id:'run-slide-test' }, artifacts:[slideInput, dataInput], config:{} });
   assert.deepEqual(slideResult.artifacts[0].sourceArtifactIds, [slideInput.id, dataInput.id]);
-  await assert.rejects(() => createSlidesHarness({ slidesHtml }).execute({ run:{ id:'run-slide-missing' }, artifacts:[slideInput], config:{} }), /requires a DataArtifact/);
-  await assert.rejects(() => createSlidesHarness({ slidesHtml: () => { throw new Error('renderer unavailable'); } }).execute({ run:{ id:'run-slide-failure' }, artifacts:[slideInput, dataInput], config:{} }), /renderer unavailable/);
+  await assert.rejects(() => createSlidesHarness({ slidesHtml, resolvePresentationStyle }).execute({ run:{ id:'run-slide-missing' }, artifacts:[slideInput], config:{} }), /requires a DataArtifact/);
+  await assert.rejects(() => createSlidesHarness({ slidesHtml: () => { throw new Error('renderer unavailable'); }, resolvePresentationStyle }).execute({ run:{ id:'run-slide-failure' }, artifacts:[slideInput, dataInput], config:{} }), /renderer unavailable/);
   const failedRegistry = createHarnessRegistry([briefHarness, { id:'failing', consumes:['FailureRequested'], async execute() { throw new Error('legacy research unavailable'); } }]);
   const failedRuntime = createRuntime({ rootDir: temp, registry: failedRegistry });
   const failed = await failedRuntime.run({ intent:'Проверить failure path', stages:[{ harnessId:'brief' },{ harnessId:'failing', requestEvent:'FailureRequested' }] });

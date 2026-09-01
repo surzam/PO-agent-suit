@@ -18,7 +18,7 @@ import { validatePresentationMaterialization } from '../harnesses/presentation-v
 
 export async function createSuiteExecution({ rootDir, eventSink = null }) {
   process.env.PO_AGENT_NO_LISTEN = '1';
-  const [{ researchService, researchSources, artifactStore, modelJson, narrativeMarkdown, slidesHtml, dataFromEvidence }, { createResearchHarness }] = await Promise.all([
+  const [{ researchService, researchSources, artifactStore, modelJson, narrativeMarkdown, slidesHtml, resolvePresentationStyle, dataFromEvidence }, { createResearchHarness }] = await Promise.all([
     import('../server.mjs'), import('../harnesses/research.mjs')
   ]);
   // Resolve context from the packaged application that owns this module. In
@@ -56,7 +56,7 @@ export async function createSuiteExecution({ rootDir, eventSink = null }) {
     if(stages.some(stage=>stage.id==='synthesis'))registry.register(createSynthesisHarness({modelJson}));
     if(stages.some(stage=>stage.id==='data'))registry.register(createDataHarness({dataFromEvidence}));
     if(stages.some(stage=>stage.id==='narrative'))registry.register(createNarrativeHarness({narrativeMarkdown}));
-    if(stages.some(stage=>stage.id==='slides'))registry.register(createSlidesHarness({slidesHtml}));
+    if(stages.some(stage=>stage.id==='slides'))registry.register(createSlidesHarness({slidesHtml,resolvePresentationStyle}));
     if(stages.some(stage=>stage.id==='interactive-result'))registry.register(createInteractiveResultHarness({modelJson}));
     return { registry, stages, definition };
   }

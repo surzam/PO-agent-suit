@@ -1,10 +1,16 @@
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import assert from 'node:assert/strict';
 import { JSDOM } from 'jsdom';
 import { validatePresentationMaterialization } from '../harnesses/presentation-validation.mjs';
+import { createRuntime } from '../core/runtime.mjs';
+import { createHarnessRegistry } from '../core/registry.mjs';
+import { createSlidesHarness } from '../harnesses/slides.mjs';
 
 process.env.PO_AGENT_NO_LISTEN = '1';
-const { slidesHtml, designFamily, templateTheme, templateVisualTheme, mottoSimilarity } = await import('../server.mjs');
+const { slidesHtml, designFamily, templateTheme, templateVisualTheme, resolvePresentationStyle, DEFAULT_PRESENTATION_STYLE_ID, mottoSimilarity } = await import('../server.mjs');
 const slugs = JSON.parse(fs.readFileSync(new URL('../template-library/index.json', import.meta.url), 'utf8')).templates.map(item => item.slug).concat('codebase-to-course');
 const visualTypes = ['statement','comparison','table','flow','quote','roadmap','statement','comparison','table','flow','quote','roadmap'];
 const plan = {
@@ -70,6 +76,52 @@ assert.ok(!appHtml.includes('xterm'), 'observation console does not expose an em
 assert.ok(!appHtml.includes('const palettes='), 'legacy menu-only palette generator removed');
 assert.equal(mottoSimilarity('Код становится понятным', 'Код становится понятным'), 1, 'exact motto repetition is detected');
 assert.equal(mottoSimilarity('Код становится понятным', 'Решение начинается с проверяемого ограничения'), 0, 'distinct mottos remain distinct');
+
+// Production integration: the actual Runtime → Slides Harness → persisted
+// Artifact boundary must never store an unresolved style identity.
+assert.ok(slugs.includes(DEFAULT_PRESENTATION_STYLE_ID),'default presentation style is an indexed slug');
+assert.equal(resolvePresentationStyle().styleId,DEFAULT_PRESENTATION_STYLE_ID,'default resolves deterministically');
+assert.deepEqual(resolvePresentationStyle('unknown-style').styleId,DEFAULT_PRESENTATION_STYLE_ID,'unknown style never persists as applied');
+const productionRoot=await fsp.mkdtemp(path.join(os.tmpdir(),'agentsuite-slides-'));
+try{
+  const registry=createHarnessRegistry([createSlidesHarness({slidesHtml,resolvePresentationStyle})]);
+  const runtime=createRuntime({rootDir:productionRoot,registry,observability:true});
+  const byFamily=new Map();for(const slug of slugs)if(!byFamily.has(designFamily(slug)))byFamily.set(designFamily(slug),slug);
+  assert.equal(byFamily.size,6,'six actual layout families are addressable');
+  for(const [family,styleId] of byFamily){
+    const run=await runtime.start({intent:`Style ${family}`,workflow:'research-presentation'});
+    const synthesis={id:`synthesis-${family}`,type:'SynthesisPlan',data:{objective:'Длинный, но реалистичный заголовок для проверки безопасной компоновки презентации',audience:'Product Owner',keyClaims:[{id:'claim-1',claim:'Проверяемый факт остаётся в безопасной области слайда.',evidenceIds:['E1'],kind:'evidence-backed'}],uncertainties:[]}};
+    const dataArtifact={id:`data-${family}`,type:'DataArtifact',data:{structuredRows:[{rowId:'row-1',values:['E1','Проверяемый факт','fixture.md','direct']}],rows:[['E1','Проверяемый факт','fixture.md','direct']],numericMetrics:[['Сигнал',12,'ед.','fixture']],provenance:{rows:[{rowId:'row-1',rowIndex:0,evidenceIds:['E1'],sourceTitle:'fixture.md'}]}}};
+    run.artifacts.push({id:synthesis.id,type:synthesis.type,sourceArtifactIds:[],file:'artifacts/synthesis.json'},{id:dataArtifact.id,type:dataArtifact.type,sourceArtifactIds:[],file:'artifacts/data.json'});
+    const outcome=await runtime.dispatch(run,{id:'slides',harnessId:'slides',config:{styleId}},{artifacts:[synthesis,dataArtifact]});
+    const presentation=outcome.persisted[0],saved=await runtime.inspect(run.id);
+    assert.equal(presentation.data.metadata.styleId,styleId,`${family}: applied style persists`);
+    assert.equal(presentation.data.metadata.layoutFamily,family,`${family}: layout family persists`);
+    assert.ok(slugs.includes(presentation.data.metadata.styleId),`${family}: persisted style is indexed`);
+    assert.ok(presentation.data.html.includes(`data-template="${styleId}"`),`${family}: renderer used persisted style`);
+    assert.ok(presentation.data.html.includes(`family-${family}`),`${family}: renderer used expected layout family`);
+    assert.equal(saved.artifacts.find(item=>item.id===presentation.id)?.type,'Presentation',`${family}: artifact persisted through Runtime`);
+
+    const longPlan={...plan,scenes:[
+      {...plan.scenes[0],title:'Короткий заголовок'},
+      {...plan.scenes[1],title:'Длинный реалистичный заголовок о том, почему команда теряет фокус при исполнении продуктового плана'},
+      {...plan.scenes[2],title:'Очень длинный, но всё ещё реалистичный заголовок о согласовании решений, ответственности и проверяемых ограничениях в ходе исполнения плана'}
+    ]};
+    const overflowHtml=slidesHtml(longPlan,{styleId,generationId:`overflow-${family}`},data);
+    const overflowDom=new JSDOM(overflowHtml);
+    const titles=[...overflowDom.window.document.querySelectorAll('.slide h1')].map(node=>node.textContent);
+    assert.deepEqual(titles,longPlan.scenes.map(scene=>scene.title),`${family}: long titles are rendered without silent truncation`);
+    assert.match(overflowHtml,/overflow-wrap:anywhere/,`${family}: title wrapping is explicitly enabled`);
+    assert.match(overflowHtml,/font:800 clamp\(/,`${family}: title scale has a bounded responsive range`);
+    overflowDom.window.close();
+  }
+  const defaultRun=await runtime.start({intent:'Default style',workflow:'research-presentation'});
+  const defaultSynthesis={id:'synthesis-default',type:'SynthesisPlan',data:{objective:'Стандартная презентация',audience:'Product Owner',keyClaims:[{id:'claim-default',claim:'Стиль по умолчанию является валидным шаблоном.',evidenceIds:['E1'],kind:'evidence-backed'}],uncertainties:[]}};
+  const defaultData={id:'data-default',type:'DataArtifact',data:{structuredRows:[{rowId:'row-default',values:['E1','Факт по умолчанию','fixture.md']}],rows:[['E1','Факт по умолчанию','fixture.md']],provenance:{rows:[{rowId:'row-default',rowIndex:0,evidenceIds:['E1'],sourceTitle:'fixture.md'}]}}};
+  defaultRun.artifacts.push({id:defaultSynthesis.id,type:defaultSynthesis.type,sourceArtifactIds:[],file:'artifacts/synthesis.json'},{id:defaultData.id,type:defaultData.type,sourceArtifactIds:[],file:'artifacts/data.json'});
+  const defaultOutcome=await runtime.dispatch(defaultRun,{id:'slides',harnessId:'slides',config:{}},{artifacts:[defaultSynthesis,defaultData]});
+  assert.equal(defaultOutcome.persisted[0].data.metadata.styleId,DEFAULT_PRESENTATION_STYLE_ID,'canonical default persists a valid template slug');
+}finally{await fsp.rm(productionRoot,{recursive:true,force:true})}
 const inlineScript = appHtml.match(/<script>([\s\S]*)<\/script>/)?.[1];
 assert.ok(inlineScript, 'app inline script exists');
 assert.doesNotThrow(() => new Function(inlineScript), 'app inline script compiles');

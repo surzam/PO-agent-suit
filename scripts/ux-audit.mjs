@@ -27,4 +27,8 @@ const app=await fs.readFile(path.join(process.cwd(),'public/ui/app.js'),'utf8');
 assert.match(app,/resultHistory/);assert.match(app,/showEvidence/);assert.match(app,/currentRunId/);assert.match(app,/screen\('history'\)/);
 const styles=await fs.readFile(path.join(process.cwd(),'public/ui/interactive-result/interactive-result.css'),'utf8');
 assert.match(styles,/prefers-reduced-motion|ir-tabs/,'interactive controls have a bounded visual contract');
+const appStyles=await fs.readFile(path.join(process.cwd(),'public/ui/app.css'),'utf8');
+assert.match(appStyles,/\.narrative-surface h1/,'Narrative owns document typography');
+assert.match(appStyles,/\.data-surface h1/,'Data owns compact table typography');
+assert.doesNotMatch(appStyles,/\.narrative-surface h1\{[^}]*6vw/,'Narrative does not inherit title-slide scale');
 console.log('ux audit: ask → watch → explore → verify → history · interactive tabs/filter/provenance/evidence · PASS');
