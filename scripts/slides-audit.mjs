@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import assert from 'node:assert/strict';
+import { JSDOM } from 'jsdom';
 
 process.env.PO_AGENT_NO_LISTEN = '1';
 const { slidesHtml, designFamily, templateTheme, templateVisualTheme, mottoSimilarity } = await import('../server.mjs');
@@ -38,6 +39,15 @@ for (const slug of slugs) {
   for (const type of new Set(visualTypes)) assert.ok(html.includes(`data-visual="${type}"`), `${slug}: ${type} renderer`);
   for (const composition of ['statement-composition','comparison-composition','table-composition','flow-composition','quote-composition','roadmap-composition']) assert.ok(html.includes(composition), `${slug}: ${composition}`);
 }
+
+const fallbackDeck=slidesHtml(plan,{styleId:'synthesis-plan',generationId:'audit-fallback'},data);
+assert.ok(!fallbackDeck.includes(':root{undefined'),'unknown style IDs receive a complete fallback theme');
+assert.ok(fallbackDeck.includes('id="deckPrev"')&&fallbackDeck.includes('id="deckNext"'),'deck exposes clickable navigation');
+const deckDom=new JSDOM(fallbackDeck,{runScripts:'dangerously',pretendToBeVisual:true});
+deckDom.window.document.getElementById('deckNext').click();
+assert.equal([...deckDom.window.document.querySelectorAll('.slide')].findIndex(item=>item.classList.contains('active')),1,'clicking Next reveals the second slide');
+assert.equal(deckDom.window.document.getElementById('deckPosition').textContent,`2 / ${plan.scenes.length}`,'click navigation updates the visible slide counter');
+deckDom.window.close();
 
 assert.equal(slugs.length, 35, 'full template library');
 assert.equal(themes.size, slugs.length, 'every template has a unique theme token set');

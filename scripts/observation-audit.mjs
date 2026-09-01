@@ -59,9 +59,17 @@ const typed=projectObservation({id:'typed',role:'product-owner',status:'complete
 ],contracts:[{stageId:'narrative',inputs:['SynthesisPlan','DataArtifact'],outputs:['Narrative']} ]});
 assert.deepEqual(typed.dependencies.filter(edge=>edge.toArtifactId==='n').map(edge=>edge.relation),['frames','grounds'],'Inspector lineage retains both typed direct responsibilities');
 const rendererSource=await fs.readFile(path.join(process.cwd(),'public/ui/app.js'),'utf8');assert.doesNotMatch(rendererSource,/runs\s*\[\s*0\s*\]/,'renderer never guesses current Run from runs[0]');assert.match(rendererSource,/localStorage\.getItem\('agentsuite\.currentRunId'\)/,'current Run selection survives Electron restart');assert.match(rendererSource,/screen\('result'\)/,'terminal Run has an explicit Result transition');
+const resultMarkup=await fs.readFile(path.join(process.cwd(),'public/index.html'),'utf8');
+assert.ok(resultMarkup.indexOf('id="resultStatus"')<resultMarkup.indexOf('id="resultArtifacts"'),'result actions follow the current Run status');
+assert.ok(resultMarkup.indexOf('id="resultArtifacts"')<resultMarkup.indexOf('id="resultNavigation"'),'materialized outputs precede secondary navigation');
+const resultStyles=await fs.readFile(path.join(process.cwd(),'public/ui/app.css'),'utf8');
+assert.match(resultStyles,/\.result-screen\s*\{[^}]*overflow-y\s*:\s*auto/s,'Result remains reachable at short viewport heights');
+assert.match(resultStyles,/-webkit-line-clamp\s*:/,'long generated Intent cannot consume the whole Result surface');
 
 const apiRoot=path.join(temp,'api');const api=await createAgentSuiteApi({rootDir:apiRoot});
 const server=http.createServer((req,res)=>api.handle(req,res));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const base=`http://127.0.0.1:${server.address().port}`;
+const scopedPresentation=await fetch(base+'/api/runs/demo-po-run/artifacts/demo-po-presentation');assert.equal(scopedPresentation.status,200,'current Run can open its Presentation directly');assert.equal((await scopedPresentation.json()).type,'Presentation');
+const foreignPresentation=await fetch(base+'/api/runs/demo-po-run/artifacts/demo-cto-presentation');assert.equal(foreignPresentation.status,404,'artifact viewer cannot leak an output from another Run');
 const start=await fetch(base+'/api/runs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({launchRequestId:'observation-audit-launch',mode:'custom',intent:'SSE contract',workflow:'brief'})});
 assert.equal(start.status,202);const {runId}=await start.json();
 const duplicate=await fetch(base+'/api/runs',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({launchRequestId:'observation-audit-launch',mode:'custom',intent:'different body is ignored for same key',workflow:'brief'})});assert.equal(duplicate.status,200);assert.equal((await duplicate.json()).runId,runId,'same launchRequestId returns same canonical Run');

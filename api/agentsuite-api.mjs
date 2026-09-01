@@ -58,6 +58,17 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
     }
     return null;
   }
+  async function artifactForRun(runId, artifactId) {
+    const run = await inspect(runId).catch(() => null);
+    if (!run) return null;
+    const metadata = (run.artifacts || []).find(item => item.id === artifactId);
+    if (!metadata) return null;
+    try {
+      const owner = metadata.ownerRunId || run.id;
+      const file = path.basename(metadata.file);
+      return JSON.parse(await fs.readFile(path.join(rootDir, 'runs', owner, 'artifacts', file), 'utf8'));
+    } catch { return null; }
+  }
   async function artifactsForRun(run) {
     return Promise.all((run.artifacts || []).map(async metadata => {
       try {
@@ -112,6 +123,8 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
     if (req.method === 'GET' && observation) { try { const run=await inspect(observation[1]),mode=run.events.some(event=>event.type==='IntentDiscoveryRequested')?'random':'custom'; return json(res,projectObservation(run,{capabilities:execution.capabilities().map(item=>item.id),configuration:execution.contextConfiguration(),artifacts:await artifactsForRun(run),contracts:execution.contracts(run.workflow,mode)})); } catch { return json(res,{error:'Run not found'},404); } }
     const artifact = url.pathname.match(/^\/api\/artifacts\/([^/]+)$/);
     if (req.method === 'GET' && artifact) { const value=await artifactById(artifact[1]); return value?json(res,value):json(res,{error:'Artifact not found'},404); }
+    const runArtifact = url.pathname.match(/^\/api\/runs\/([^/]+)\/artifacts\/([^/]+)$/);
+    if (req.method === 'GET' && runArtifact) { const value=await artifactForRun(runArtifact[1],runArtifact[2]); return value?json(res,value):json(res,{error:'Artifact not found in Run'},404); }
     if (req.method === 'POST' && url.pathname === '/api/runs') {
       return serializeLaunch(async()=>{
       const input=await body(req); const role=input.role || 'product-owner';
