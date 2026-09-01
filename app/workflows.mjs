@@ -6,7 +6,7 @@ const DEFINITIONS = Object.freeze({
   'research-narrative': { stages:['brief','research','validation','synthesis','data','narrative'], requiredArtifacts:['DataArtifact','Narrative'] },
   'research-analysis': { stages:['brief','research','validation','synthesis','data','narrative'], requiredArtifacts:['DataArtifact','Narrative'] },
   'research-presentation': {
-    stages:['brief','research','validation','synthesis','data','narrative','slides'],
+    stages:['brief','research','validation','synthesis','data','interactive-result','narrative','slides'],
     requiredArtifacts:['DataArtifact','Narrative','Presentation'],
     requiredMaterializations:[
       { type:'DataArtifact', field:'rows' },
@@ -26,6 +26,7 @@ export function workflowDefinition(workflow = 'brief', mode = 'custom') {
     validation:{id:'validation',harnessId:'validation',requestEvent:'ValidationRequested'},
     synthesis:{id:'synthesis',harnessId:'synthesis',requestEvent:'SynthesisRequested',config:{requestedOutputs:['decision-memo','presentation']}},
     data:{id:'data',harnessId:'data',requestEvent:'DataRequested'},
+    'interactive-result':{id:'interactive-result',harnessId:'interactive-result',requestEvent:'InteractiveResultRequested',optional:true},
     narrative:{id:'narrative',harnessId:'narrative',requestEvent:'NarrativeRequested'},
     slides:{id:'slides',harnessId:'slides',requestEvent:'PresentationRequested'}
   };

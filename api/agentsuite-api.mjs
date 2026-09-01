@@ -139,7 +139,7 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
       return launched.run;
     }),
     cancel:async runId=>{const target=await inspect(runId);const mode=target.events.some(event=>event.type==='IntentDiscoveryRequested')?'random':'custom';return execution.runtime(target.workflow,mode).runtime.cancel(target.id)},
-    artifact:async(runId,artifactId)=>{const run=await inspect(runId).catch(()=>null),metadata=run?.artifacts?.find(item=>item.id===artifactId);if(!metadata||!['DataArtifact','Narrative','Presentation'].includes(metadata.type))return null;return artifactForRun(runId,artifactId)}
+    artifact:async(runId,artifactId)=>{const run=await inspect(runId).catch(()=>null),metadata=run?.artifacts?.find(item=>item.id===artifactId);if(!metadata||!['DataArtifact','Narrative','Presentation','InteractiveResult'].includes(metadata.type))return null;return artifactForRun(runId,artifactId)}
   });
   function trustedMutation(req){
     const host=String(req.headers.host||'').toLowerCase();

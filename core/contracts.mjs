@@ -32,7 +32,11 @@ export const EVENT_TYPES = Object.freeze([
   'ResearchContextRequired',
   'ArtifactCreated',
   'RunCompleted',
-  'RunFailed'
+  'RunFailed',
+  'InteractiveResultRequested',
+  'InteractiveResultCreated',
+  'InteractiveResultCompleted',
+  'OptionalMaterializationFailed'
 ]);
 
 export function validateRunId(value) {

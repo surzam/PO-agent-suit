@@ -53,6 +53,7 @@ assert.equal(operationProjection.agentActions.every(action=>action.relatedArtifa
 assert.ok(operationProjection.terminalRecords.some(record=>record.kind==='event'&&record.event.sequence===5),'missing correlation remains a separate terminal record');
 assert.ok(operationProjection.terminalRecords.some(record=>record.kind==='event'&&record.event.type==='ArtifactCreated'),'uncorrelated ArtifactCreated remains separate');
 assert.deepEqual(projectObservation(sameDescriptor,{capabilities:['FILES'],artifacts:[{id:'free-artifact',type:'Probe',data:{}}]}).agentActions,operationProjection.agentActions,'same journal rebuilds same terminal actions');
+const timed=projectObservation({id:'timed',role:'product-owner',status:'running',events:[{sequence:1,eventId:'timed:1',type:'CapabilityStarted',at:'2026-09-01T00:00:00.000Z',payload:{operationId:'timed-op',capability:'FILES',displayInput:'files.read("timed.md")'}},{sequence:2,eventId:'timed:2',type:'CapabilityCompleted',at:'2026-09-01T00:00:02.500Z',payload:{operationId:'timed-op',capability:'FILES'}}]},{capabilities:['FILES']});assert.equal(timed.agentActions[0].durationMs,2500,'operation timing is derived from canonical event timestamps');
 
 const typed=projectObservation({id:'typed',role:'product-owner',status:'completed',events:[]},{artifacts:[
   {id:'s',type:'SynthesisPlan',data:{}},{id:'d',type:'DataArtifact',sourceArtifactIds:['s'],data:{}},{id:'n',type:'Narrative',sourceArtifactIds:['s','d'],data:{}}
@@ -65,6 +66,8 @@ assert.ok(resultMarkup.indexOf('id="resultArtifacts"')<resultMarkup.indexOf('id=
 const resultStyles=await fs.readFile(path.join(process.cwd(),'public/ui/app.css'),'utf8');
 assert.match(resultStyles,/\.result-screen\s*\{[^}]*overflow-y\s*:\s*auto/s,'Result remains reachable at short viewport heights');
 assert.match(resultStyles,/-webkit-line-clamp\s*:/,'long generated Intent cannot consume the whole Result surface');
+assert.match(resultStyles,/--obs-selected:/,'Observation state tokens are centralized');assert.match(resultStyles,/--obs-success:/,'success state has a semantic token');assert.match(resultStyles,/background-image:\s*linear-gradient/,'workstation field is static CSS');assert.match(resultStyles,/prefers-reduced-motion:reduce/,'reduced motion keeps Observation readable without motion');
+const keyboardSource=await fs.readFile(path.join(process.cwd(),'public/ui/observation/event-keyboard.js'),'utf8');assert.match(keyboardSource,/prefers-reduced-motion/,'keyboard animation honors reduced motion');
 
 const apiRoot=path.join(temp,'api');const api=await createAgentSuiteApi({rootDir:apiRoot});
 const server=http.createServer((req,res)=>api.handle(req,res));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const base=`http://127.0.0.1:${server.address().port}`;

@@ -16,7 +16,9 @@
   "scripts": {
     "dev": "node server.mjs",
     "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check electron/main.mjs && node --check electron/preload.mjs && node --check research/storage.mjs && node --check research/sources.mjs && node --check research/service.mjs && node --check interop/ag-ui/mapping.mjs && node --check interop/ag-ui/projection.mjs && node --check interop/ag-ui/serializer.mjs && node --check interop/ag-ui/input-adapter.mjs && node --check interop/ag-ui/endpoint.mjs",
+    "check": "node --check server.mjs && node --check electron/main.mjs && node --check electron/preload.mjs && node --check research/storage.mjs && node --check research/sources.mjs && node --check research/service.mjs && node --check interop/ag-ui/mapping.mjs && node --check interop/ag-ui/projection.mjs && node --check interop/ag-ui/serializer.mjs && node --check interop/ag-ui/input-adapter.mjs && node --check interop/ag-ui/endpoint.mjs && node --check interop/a2ui/protocol.mjs && node --check interop/a2ui/projection.mjs && node --check interop/a2ui/validator.mjs && node --check harnesses/interactive-result.mjs && node --check public/ui/interactive-result/renderer.js",
+    "test:a2ui": "node scripts/a2ui-audit.mjs",
+    "test:ux": "node scripts/ux-audit.mjs",
     "test:slides": "node scripts/slides-audit.mjs",
     "test:research": "node scripts/research-audit.mjs",
     "test:api": "node scripts/api-audit.mjs",

@@ -267,7 +267,12 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
       for (const stage of stages) {
         if(controller.signal.aborted)throw Object.assign(new Error('Run cancelled by user'),{code:'ABORTED'});
         activeStage = stage;
-        const outcome = await dispatch(run, stage, context,controller.signal);
+        let outcome;
+        try { outcome = await dispatch(run, stage, context,controller.signal); }
+        catch(error) {
+          if(stage.optional){ await appendEvent(run,'OptionalMaterializationFailed',{stage:stage.id,harnessId:stage.harnessId,code:error.code||'MATERIALIZATION_FAILED',message:String(error.message||error).slice(0,240)}); continue; }
+          throw error;
+        }
         if (outcome.halt) {
           run.status = outcome.halt.status || 'needs-context';
           run.reasonCode=outcome.halt.cause||'insufficient-context';

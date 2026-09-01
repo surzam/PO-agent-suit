@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentsuite://catalog/interactive-result/v1",
+  "catalogId": "agentsuite://catalog/interactive-result/v1",
+  "protocolVersion": "1.0",
+  "version": "1",
+  "components": {
+    "Column": {"type":"object","properties":{"component":{"const":"Column"},"children":{"$ref":"https://a2ui.org/specification/v1_0/common_types.json#/$defs/ChildList"}},"required":["component","children"]},
+    "Row": {"type":"object","properties":{"component":{"const":"Row"},"children":{"$ref":"https://a2ui.org/specification/v1_0/common_types.json#/$defs/ChildList"}},"required":["component","children"]},
+    "Section": {"type":"object","properties":{"component":{"const":"Section"},"title":{"$ref":"https://a2ui.org/specification/v1_0/common_types.json#/$defs/DynamicString"},"children":{"$ref":"https://a2ui.org/specification/v1_0/common_types.json#/$defs/ChildList"}},"required":["component","children"]},
+    "Heading": {"type":"object","properties":{"component":{"const":"Heading"},"text":{"$ref":"https://a2ui.org/specification/v1_0/common_types.json#/$defs/DynamicString"}},"required":["component","text"]},
+    "Text": {"type":"object","properties":{"component":{"const":"Text"},"text":{"$ref":"https://a2ui.org/specification/v1_0/common_types.json#/$defs/DynamicString"}},"required":["component","text"]},
+    "Metric": {"type":"object","properties":{"component":{"const":"Metric"},"metricId":{"type":"string"},"label":{"$ref":"https://a2ui.org/specification/v1_0/common_types.json#/$defs/DynamicString"},"value":{"$ref":"https://a2ui.org/specification/v1_0/common_types.json#/$defs/DynamicNumber"},"unit":{"$ref":"https://a2ui.org/specification/v1_0/common_types.json#/$defs/DynamicString"}},"required":["component","metricId","value"]},
+    "Fact": {"type":"object","properties":{"component":{"const":"Fact"},"rowId":{"type":"string"},"text":{"$ref":"https://a2ui.org/specification/v1_0/common_types.json#/$defs/DynamicString"}},"required":["component","rowId","text"]},
+    "Insight": {"type":"object","properties":{"component":{"const":"Insight"},"insightId":{"type":"string"},"text":{"$ref":"https://a2ui.org/specification/v1_0/common_types.json#/$defs/DynamicString"}},"required":["component","insightId","text"]},
+    "EvidenceRef": {"type":"object","properties":{"component":{"const":"EvidenceRef"},"evidenceId":{"type":"string"}},"required":["component","evidenceId"]},
+    "DataTable": {"type":"object","properties":{"component":{"const":"DataTable"},"dataPath":{"type":"string"}},"required":["component","dataPath"]},
+    "Tabs": {"type":"object","properties":{"component":{"const":"Tabs"},"children":{"$ref":"https://a2ui.org/specification/v1_0/common_types.json#/$defs/ChildList"}},"required":["component","children"]},
+    "Callout": {"type":"object","properties":{"component":{"const":"Callout"},"text":{"$ref":"https://a2ui.org/specification/v1_0/common_types.json#/$defs/DynamicString"}},"required":["component","text"]},
+    "Divider": {"type":"object","properties":{"component":{"const":"Divider"}},"required":["component"]},
+    "ArtifactLink": {"type":"object","properties":{"component":{"const":"ArtifactLink"},"artifactId":{"type":"string"}},"required":["component","artifactId"]}
+  },
+  "functions": {}
+}

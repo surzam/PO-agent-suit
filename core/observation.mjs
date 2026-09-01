@@ -1,6 +1,6 @@
-const FLOW=[['intent-discovery','DISCOVERY'],['intent','INTENT'],['brief','BRIEF'],['research','RESEARCH'],['validation','VALIDATION'],['synthesis','SYNTHESIS'],['data','DATA'],['narrative','STORY'],['slides','PRESENTATION']];
-const ARTIFACT_STAGE={Intent:'intent',Brief:'brief',EvidenceSet:'research',ValidationReport:'validation',SynthesisPlan:'synthesis',DataArtifact:'data',Narrative:'narrative',Presentation:'slides'};
-const REQUEST_STAGE={IntentDiscoveryRequested:'intent-discovery',BriefRequested:'brief',ResearchRequested:'research',ValidationRequested:'validation',SynthesisRequested:'synthesis',DataRequested:'data',NarrativeRequested:'narrative',PresentationRequested:'slides'};
+const FLOW=[['intent-discovery','DISCOVERY'],['intent','INTENT'],['brief','BRIEF'],['research','RESEARCH'],['validation','VALIDATION'],['synthesis','SYNTHESIS'],['data','DATA'],['interactive-result','INTERACTIVE'],['narrative','STORY'],['slides','PRESENTATION']];
+const ARTIFACT_STAGE={Intent:'intent',Brief:'brief',EvidenceSet:'research',ValidationReport:'validation',SynthesisPlan:'synthesis',DataArtifact:'data',InteractiveResult:'interactive-result',Narrative:'narrative',Presentation:'slides'};
+const REQUEST_STAGE={IntentDiscoveryRequested:'intent-discovery',BriefRequested:'brief',ResearchRequested:'research',ValidationRequested:'validation',SynthesisRequested:'synthesis',DataRequested:'data',InteractiveResultRequested:'interactive-result',NarrativeRequested:'narrative',PresentationRequested:'slides'};
 const RELATION_CONTRACT_VERSION=1;
 const RELATIONS={
   'Intent>Brief':'supplies','Brief>EvidenceSet':'supplies','EvidenceSet>ValidationReport':'validates',
@@ -35,6 +35,8 @@ function projectActions(events,artifactById){
     const id=event.payload?.operationId;if(!id)continue;
     const action=operations.get(id)||{id:`action:${id}`,correlationId:id,firstSequence:event.sequence,lastSequence:event.sequence,stageId:stageFor(event),harnessId:event.payload?.harnessId||null,capability:String(event.payload?.capability||(event.type.startsWith('Inference')?'MODEL':'')).toUpperCase()||null,displayInput:null,status:'requested',resultSummary:null,relatedEventIds:[],relatedArtifactIds:[]};
     action.firstSequence=Math.min(action.firstSequence,event.sequence);action.lastSequence=Math.max(action.lastSequence,event.sequence);action.relatedEventIds.push(event.eventId||event.id);action.displayInput=action.displayInput||safeDisplay(event.payload);
+    if(/Started$/.test(event.type)||event.type==='SourceOpened')action.startedAt=action.startedAt||event.at;
+    if(/Completed$|Failed$/.test(event.type)||event.type==='SourceRead'){action.finishedAt=event.at;const explicit=Number(event.payload?.durationMs);const measured=action.startedAt?Date.parse(event.at)-Date.parse(action.startedAt):NaN;action.durationMs=Number.isFinite(explicit)&&explicit>=0?explicit:Number.isFinite(measured)&&measured>=0?measured:null}
     if(/Started$/.test(event.type)||event.type==='SourceOpened')action.status='running';if(/Completed$/.test(event.type)||event.type==='SourceRead')action.status='completed';if(/Failed$/.test(event.type))action.status='failed';operations.set(id,action);
   }
   for(const event of events){const operationId=event.type==='ArtifactCreated'?event.payload?.producedByOperationId:null;if(operationId&&operations.has(operationId))operations.get(operationId).relatedArtifactIds.push(event.payload.artifactId)}
@@ -51,6 +53,7 @@ function artifactPreview(item){
   if(item.type==='ValidationReport')return{...base,valid:data.valid,decisions:data.items||[],conflicts:data.conflicts||[],unknowns:data.unknowns||[]};
   if(item.type==='SynthesisPlan')return{...base,objective:data.objective,audience:data.audience,claims:data.keyClaims||[],uncertainties:data.uncertainties||[]};
   if(item.type==='DataArtifact')return{...base,title:data.title,columns:data.columns||[],rows:data.rows||[],metrics:data.numericMetrics||[],insights:data.insights||[],provenance:data.provenance||{}};
+  if(item.type==='InteractiveResult')return{...base,surfaceId:data.surfaceId,catalogId:data.catalogId,protocolVersion:data.protocolVersion,planner:data.planner||null};
   if(item.type==='Narrative')return{...base,audience:data.audience,excerpt:clip(data.content,360),sections:data.sections||[]};
   if(item.type==='Presentation')return{...base,slides:data.slides||[]};
   return base;
@@ -85,6 +88,7 @@ export function projectObservation(run,{capabilities=[],configuration={},artifac
   for(const claim of claims)for(const id of claim.evidenceIds)evidenceById.get(id)?.usedBy.push(claim.id);
   const artifactRefs=artifacts.map(item=>({...artifactPreview(item),stage:ARTIFACT_STAGE[item.type]||null,reused:Boolean(metadataById.get(item.id)?.reused),producedByOperationId:metadataById.get(item.id)?.producedByOperationId||null}));
   const outputs=artifactRefs.filter(item=>['Narrative','DataArtifact','Presentation'].includes(item.type)).map(item=>{const claimIds=new Set(),evidenceIds=new Set(),dataRefs={rowIds:new Set(),metricIds:new Set(),insightIds:new Set()};for(const row of item.provenance?.rows||[])for(const id of row.claimIds||[])claimIds.add(String(id));for(const part of [...(item.sections||[]),...(item.slides||[])]){for(const id of part.claimIds||[])claimIds.add(String(id));for(const id of part.evidenceIds||[])evidenceIds.add(String(id));for(const key of Object.keys(dataRefs))for(const id of part.dataRefs?.[key]||[])dataRefs[key].add(String(id))}for(const id of evidenceIds)for(const claimId of evidenceById.get(id)?.usedBy||[])claimIds.add(String(claimId));return{artifactId:item.artifactId,type:item.type,reused:item.reused,claimIds:[...claimIds],evidenceIds:[...evidenceIds],dataRefs:Object.fromEntries(Object.entries(dataRefs).map(([key,value])=>[key,[...value]]))}});
+  outputs.push(...artifactRefs.filter(item=>item.type==='InteractiveResult').map(item=>({artifactId:item.artifactId,type:item.type,reused:item.reused,claimIds:[],evidenceIds:[],dataRefs:{rowIds:[],metricIds:[],insightIds:[]}})));
   for(const output of outputs)for(const id of output.claimIds)claimById.get(id)?.outputTypes.push(output.type);
   const stages=FLOW.map(([id,label])=>{const stageArtifacts=artifactRefs.filter(item=>item.stage===id),activeActionIds=actions.filter(action=>action.stageId===id&&['requested','running'].includes(action.status)).map(action=>action.id);return{id,label,state:states.get(id),active:activeStage===id,result:{artifacts:stageArtifacts.filter(item=>!item.reused),reusedArtifacts:stageArtifacts.filter(item=>item.reused),observableOutcome:stageArtifacts.length?`${stageArtifacts.map(item=>item.type).join(', ')} ready`:null,activeActionIds,failure:failures.get(id)||null}}});
   const fullStageEdges=[];

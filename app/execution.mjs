@@ -9,6 +9,7 @@ import { createSynthesisHarness } from '../harnesses/synthesis.mjs';
 import { createNarrativeHarness } from '../harnesses/narrative.mjs';
 import { createDataHarness } from '../harnesses/data.mjs';
 import { createSlidesHarness } from '../harnesses/slides.mjs';
+import { createInteractiveResultHarness } from '../harnesses/interactive-result.mjs';
 import { roleRegistry } from '../roles/registry.mjs';
 import { intentHarness } from '../harnesses/intent.mjs';
 import { createIntentDiscoveryHarness } from '../harnesses/intent-discovery.mjs';
@@ -56,6 +57,7 @@ export async function createSuiteExecution({ rootDir, eventSink = null }) {
     if(stages.some(stage=>stage.id==='data'))registry.register(createDataHarness({dataFromEvidence}));
     if(stages.some(stage=>stage.id==='narrative'))registry.register(createNarrativeHarness({narrativeMarkdown}));
     if(stages.some(stage=>stage.id==='slides'))registry.register(createSlidesHarness({slidesHtml}));
+    if(stages.some(stage=>stage.id==='interactive-result'))registry.register(createInteractiveResultHarness({modelJson}));
     return { registry, stages, definition };
   }
   return {

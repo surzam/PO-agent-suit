@@ -13,7 +13,7 @@ import {evidenceFromDataArtifact} from '../harnesses/data-substrate.mjs';
 const temp=await fs.mkdtemp(path.join(os.tmpdir(),'agentsuite-reliability-'));
 try{
   const full=workflowDefinition('research-presentation','custom');
-  assert.deepEqual(full.stages.map(stage=>stage.id),['intent','brief','research','validation','synthesis','data','narrative','slides']);
+  assert.deepEqual(full.stages.map(stage=>stage.id),['intent','brief','research','validation','synthesis','data','interactive-result','narrative','slides']);
   assert.ok(full.stages.findIndex(stage=>stage.id==='data')<full.stages.findIndex(stage=>stage.id==='narrative'),'Data precedes Narrative');
   assert.deepEqual(workflowDefinition('research','custom').requiredArtifacts,['EvidenceSet'],'research-only has workflow-specific completion');
 
