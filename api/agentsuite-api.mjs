@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { createSuiteExecution } from '../app/execution.mjs';
 import { ensureDemoFixture } from './demo-fixture.mjs';
 import { projectObservation } from '../core/observation.mjs';
+import { createAgUiEndpoint } from '../interop/ag-ui/endpoint.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const publicDir = path.join(root, 'public');
@@ -104,8 +105,36 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
     const heartbeat = setInterval(() => res.write(': journal-live\n\n'), 15000);
     req.on('close', () => { clearInterval(heartbeat); unsubscribe(); });
   }
+  const observationForRun=async run=>{const mode=run.events.some(event=>event.type==='IntentDiscoveryRequested')?'random':'custom';return projectObservation(run,{capabilities:execution.capabilities().map(item=>item.id),configuration:execution.contextConfiguration(),artifacts:await artifactsForRun(run),contracts:execution.contracts(run.workflow,mode)})};
+  const agUiEndpoint=createAgUiEndpoint({
+    inspect,
+    observation:observationForRun,
+    subscribe,
+    threadIdForRun:async run=>{let rootRun=run,guard=0;while(rootRun.parentRunId&&guard++<100){const parent=await inspect(rootRun.parentRunId).catch(()=>null);if(!parent)break;rootRun=parent}return`agentsuite-thread:${rootRun.id}`},
+    launch:value=>serializeLaunch(async()=>{
+      if(launches.has(value.launchRequestId)){const existingId=launches.get(value.launchRequestId);if(existingId!==value.runId)throw Object.assign(new Error('launchRequestId belongs to another Run'),{code:'LAUNCH_REQUEST_CONFLICT',statusCode:409});return inspect(existingId)}
+      if(activeForeground){const active=await inspect(activeForeground).catch(()=>null);if(active&&['created','launching','running'].includes(active.status))throw Object.assign(new Error('Another foreground Run is active'),{code:'ACTIVE_RUN_EXISTS',statusCode:409});activeForeground=null}
+      if(!execution.roleRegistry.get(value.role))throw Object.assign(new Error(`Unknown Role: ${value.role}`),{code:'UNKNOWN_ROLE',statusCode:400});
+      let launched;
+      if(value.parentRunId){
+        const source=await inspect(value.parentRunId).catch(()=>null);if(!source)throw Object.assign(new Error('Parent Run not found'),{code:'PARENT_RUN_NOT_FOUND',statusCode:404});
+        const sourceThread=source.interopMetadata?.agUi?.threadId;if(sourceThread&&sourceThread!==value.threadId)throw Object.assign(new Error('Fork must remain in its AG-UI thread'),{code:'THREAD_LINEAGE_MISMATCH',statusCode:409});
+        const workflow=value.workflow||source.workflow,{runtime,stages,definition}=execution.runtime(workflow,'custom');
+        launched=await runtime.launchFork({sourceRunId:source.id,fromStage:value.fromStage,role:value.role,workflow,stages,launchRequestId:value.launchRequestId,workflowDefinition:definition,proposedRunId:value.runId,interopMetadata:{agUi:{threadId:value.threadId}}});
+      }else{
+        const {runtime,stages,definition}=execution.runtime(value.workflow,value.mode);
+        launched=await runtime.launch({intent:value.intent,role:value.role,workflow:value.workflow,stages,allowEmptyIntent:value.mode==='random',launchRequestId:value.launchRequestId,workflowDefinition:definition,proposedRunId:value.runId,interopMetadata:{agUi:{threadId:value.threadId}}});
+      }
+      launches.set(value.launchRequestId,launched.run.id);activeForeground=launched.run.id;
+      launched.completion.catch(error=>console.error(`[AgentSuite AG-UI run] ${launched.run.id}: ${error.message}`)).finally(()=>{if(activeForeground===launched.run.id)activeForeground=null});
+      return launched.run;
+    }),
+    cancel:async runId=>{const target=await inspect(runId);const mode=target.events.some(event=>event.type==='IntentDiscoveryRequested')?'random':'custom';return execution.runtime(target.workflow,mode).runtime.cancel(target.id)},
+    artifact:async(runId,artifactId)=>{const run=await inspect(runId).catch(()=>null),metadata=run?.artifacts?.find(item=>item.id===artifactId);if(!metadata||!['DataArtifact','Narrative','Presentation'].includes(metadata.type))return null;return artifactForRun(runId,artifactId)}
+  });
   async function handle(req, res) {
     const url = new URL(req.url, 'http://127.0.0.1');
+    if(url.pathname==='/api/ag-ui'||url.pathname.startsWith('/api/ag-ui/'))return agUiEndpoint(req,res,url);
     if (req.method === 'GET' && url.pathname === '/api/health') return json(res,{ok:true, runtime:'agentsuite', capabilities:execution.capabilities()});
     if(req.method==='GET'&&url.pathname==='/api/diagnostics'){const lines=await fs.readFile(diagnosticsFile,'utf8').then(text=>text.trim().split(/\r?\n/).filter(Boolean).slice(-80).map(JSON.parse)).catch(()=>[]),runs=await allRuns();const lastFailure=[...lines].reverse().find(item=>['RunFailed','RunInterrupted','RunCancelled'].includes(item.eventCode));return json(res,{runtimeInstanceId:execution.runtimeInstanceId,currentRunId:activeForeground,activeRunId:activeForeground,lastRunId:runs[0]?.id||null,lastCompletedRunId:runs.find(run=>run.status==='completed')?.id||null,lastFailedRunId:runs.find(run=>['failed','interrupted','cancelled'].includes(run.status))?.id||null,lastFailureCode:lastFailure?.reasonCode||null,logLocation:'AgentSuite userData/workspace/diagnostics.jsonl',records:lines})}
     if (req.method === 'POST' && url.pathname === '/api/brief/turn') return json(res,{ok:true,...await execution.briefTurn(await body(req))});
@@ -120,7 +149,7 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
     const detail = url.pathname.match(/^\/api\/runs\/([^/]+)$/);
     if (req.method === 'GET' && detail) { try { return json(res,await inspect(detail[1])); } catch { return json(res,{error:'Run not found'},404); } }
     const observation = url.pathname.match(/^\/api\/runs\/([^/]+)\/observation$/);
-    if (req.method === 'GET' && observation) { try { const run=await inspect(observation[1]),mode=run.events.some(event=>event.type==='IntentDiscoveryRequested')?'random':'custom'; return json(res,projectObservation(run,{capabilities:execution.capabilities().map(item=>item.id),configuration:execution.contextConfiguration(),artifacts:await artifactsForRun(run),contracts:execution.contracts(run.workflow,mode)})); } catch { return json(res,{error:'Run not found'},404); } }
+    if (req.method === 'GET' && observation) { try { const run=await inspect(observation[1]); return json(res,await observationForRun(run)); } catch { return json(res,{error:'Run not found'},404); } }
     const artifact = url.pathname.match(/^\/api\/artifacts\/([^/]+)$/);
     if (req.method === 'GET' && artifact) { const value=await artifactById(artifact[1]); return value?json(res,value):json(res,{error:'Artifact not found'},404); }
     const runArtifact = url.pathname.match(/^\/api\/runs\/([^/]+)\/artifacts\/([^/]+)$/);

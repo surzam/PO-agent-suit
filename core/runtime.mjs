@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { createArtifact, createEvent, createRun } from './contracts.mjs';
+import { createArtifact, createEvent, createRun, validateRunId } from './contracts.mjs';
 
 const TERMINAL_STATES=new Set(['completed','failed','cancelled','interrupted']);
 const OPERATION_START=new Set(['CapabilityRequested','CapabilityStarted','InferenceRequested','InferenceStarted','ArtifactRequested','SourceOpened']);
@@ -70,17 +70,18 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     return event;
   }
 
-  async function start({ intent, role = 'product-owner', workflow = 'brief', parentRunId = null, reusedArtifactIds = [], allowEmptyIntent = false, launchRequestId = null } = {}) {
+  async function start({ intent, role = 'product-owner', workflow = 'brief', parentRunId = null, reusedArtifactIds = [], allowEmptyIntent = false, launchRequestId = null, proposedRunId = null, interopMetadata = null } = {}) {
     if (!allowEmptyIntent && !String(intent || '').trim()) throw new Error('A run requires an intent');
-    const run = createRun({ intent, role, workflow, parentRunId, reusedArtifactIds, runtimeInstanceId, launchRequestId });
-    await fs.mkdir(path.join(runsDir, run.id, 'artifacts'), { recursive: true });
+    if(proposedRunId)validateRunId(proposedRunId);
+    const run = createRun({ id:proposedRunId,intent, role, workflow, parentRunId, reusedArtifactIds, runtimeInstanceId, launchRequestId,interopMetadata });
+    await fs.mkdir(runsDir,{recursive:true});
+    try{await fs.mkdir(path.join(runsDir,run.id),{recursive:false})}catch(error){if(error?.code==='EEXIST')throw Object.assign(new Error('Run identity already exists'),{code:'RUN_ID_CONFLICT'});throw error}
+    await fs.mkdir(path.join(runsDir, run.id, 'artifacts'));
     await fs.writeFile(path.join(runsDir, run.id, 'events.jsonl'), '');
     await saveRun(run);
     await appendEvent(run, 'RunRequested', { intent: run.intent, role: run.role, workflow: run.workflow });
     run.status='launching';
     await appendEvent(run,'RunLaunching',{runtimeInstanceId});
-    const definition = roles?.get?.(run.role) || null;
-    if (definition) await appendEvent(run, 'RoleContextLoaded', { roleId:definition.id, label:definition.label || definition.id });
     return run;
   }
 
@@ -95,7 +96,7 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     }
   }
 
-  async function prepareFork({ sourceRunId, fromStage, intent, role, workflow, stages = [], launchRequestId = null } = {}) {
+  async function prepareFork({ sourceRunId, fromStage, intent, role, workflow, stages = [], launchRequestId = null, proposedRunId = null, interopMetadata = null } = {}) {
     if (!sourceRunId) throw new Error('A rerun requires a source run');
     if (!fromStage) throw new Error('A rerun requires a starting stage');
     const sourceRun = await inspect(sourceRunId);
@@ -123,15 +124,16 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     }
     reusable.forEach(validateUpstream);
     const reusedArtifactIds = reusable.map(artifact => artifact.id);
-    const run = await start({ intent: intent || sourceRun.intent, role: role || sourceRun.role, workflow: workflow || sourceRun.workflow, parentRunId: sourceRun.id, reusedArtifactIds,launchRequestId });
+    const run = await start({ intent: intent || sourceRun.intent, role: role || sourceRun.role, workflow: workflow || sourceRun.workflow, parentRunId: sourceRun.id, reusedArtifactIds,launchRequestId,proposedRunId,interopMetadata });
     const context = { artifacts: [] };
+    const reuseEvents=[];
     for (const metadata of reusable) {
       const artifact = await loadArtifact(sourceRun, metadata);
       run.artifacts.push({ ...metadata, runId: artifact.runId, ownerRunId: artifact.runId, reused: true });
       context.artifacts.push(artifact);
-      await appendEvent(run, 'ArtifactReused', { artifactId: metadata.id, type: metadata.type, sourceRunId: sourceRun.id });
+      reuseEvents.push({ artifactId: metadata.id, type: metadata.type, sourceRunId: sourceRun.id });
     }
-    return { run, context, stages:selectedStages };
+    return { run, context, stages:selectedStages,reuseEvents };
   }
 
   async function verifyRequiredOutputs(run,definition={}){
@@ -151,13 +153,16 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     }
   }
 
-  async function execute(run, stages, context, definition={}) {
+  async function execute(run, stages, context, definition={},initialEvents=[]) {
     let activeStage = null;
     const controller=new AbortController();controllers.set(run.id,{controller,run,cancellationRecorded:false});
     try {
       run.status = 'running';
       run.reasonCode=null;
       await appendEvent(run,'RunStarted',{runtimeInstanceId});
+      const roleDefinition=roles?.get?.(run.role)||null;
+      if(roleDefinition)await appendEvent(run,'RoleContextLoaded',{roleId:roleDefinition.id,label:roleDefinition.label||roleDefinition.id});
+      for(const event of initialEvents)await appendEvent(run,event.type,event.payload);
       for (const stage of stages) {
         if(controller.signal.aborted)throw Object.assign(new Error('Run cancelled by user'),{code:'ABORTED'});
         activeStage = stage;
@@ -188,7 +193,7 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
 
   async function launchFork(options = {}) {
     const prepared = await prepareFork(options);
-    const completion = execute(prepared.run, prepared.stages, prepared.context,options.workflowDefinition||{});
+    const completion = execute(prepared.run, prepared.stages, prepared.context,options.workflowDefinition||{},prepared.reuseEvents.map(payload=>({type:'ArtifactReused',payload})));
     return { run:prepared.run, completion };
   }
 
@@ -247,9 +252,9 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     return { harness, trigger, persisted, halt: result.halt || null };
   }
 
-  async function launch({ intent, role = 'product-owner', workflow = 'brief', stages = [], allowEmptyIntent = false, launchRequestId = null, workflowDefinition = {} } = {}) {
+  async function launch({ intent, role = 'product-owner', workflow = 'brief', stages = [], allowEmptyIntent = false, launchRequestId = null, workflowDefinition = {}, proposedRunId = null, interopMetadata = null } = {}) {
     if (!Array.isArray(stages) || !stages.length) throw new Error('A workflow requires at least one harness stage');
-    const run = await start({ intent, role, workflow, allowEmptyIntent: allowEmptyIntent || defaultAllowEmptyIntent,launchRequestId });
+    const run = await start({ intent, role, workflow, allowEmptyIntent: allowEmptyIntent || defaultAllowEmptyIntent,launchRequestId,proposedRunId,interopMetadata });
     const completion = execute(run, stages, { artifacts: [] },workflowDefinition);
     return { run, completion };
   }
@@ -266,7 +271,7 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
   async function cancel(id){
     const run=await inspect(id);if(TERMINAL_STATES.has(run.status))return run;
     const active=controllers.get(id),target=active?.run||run;target.status='cancelled';target.reasonCode='user-cancelled';
-    await appendEvent(target,'RunCancelled',{reasonCode:target.reasonCode,message:'Run cancelled by user',physicalOperationSettled:false});
+    await appendEvent(target,'RunCancelled',{reasonCode:target.reasonCode,message:'Run cancelled by user',physicalOperationSettled:!active});
     if(active){active.cancellationRecorded=true;active.controller.abort()}
     return inspect(id);
   }

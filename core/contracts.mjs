@@ -35,10 +35,16 @@ export const EVENT_TYPES = Object.freeze([
   'RunFailed'
 ]);
 
-export function createRun({ intent, role = 'product-owner', workflow = 'brief', parentRunId = null, reusedArtifactIds = [], runtimeInstanceId = null, launchRequestId = null } = {}) {
+export function validateRunId(value) {
+  const id=String(value||'');
+  if(!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,159}$/.test(id)||id.includes('..'))throw Object.assign(new Error('Invalid Run identity'),{code:'INVALID_RUN_ID'});
+  return id;
+}
+
+export function createRun({ id = null, intent, role = 'product-owner', workflow = 'brief', parentRunId = null, reusedArtifactIds = [], runtimeInstanceId = null, launchRequestId = null, interopMetadata = null } = {}) {
   const now = new Date().toISOString();
   return {
-    id: `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: id ? validateRunId(id) : `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     intent: String(intent || '').trim(),
     role,
     workflow,
@@ -48,6 +54,7 @@ export function createRun({ intent, role = 'product-owner', workflow = 'brief', 
     reasonCode: null,
     ownerRuntimeInstanceId: runtimeInstanceId,
     launchRequestId,
+    interopMetadata:interopMetadata&&typeof interopMetadata==='object'?structuredClone(interopMetadata):null,
     lastRuntimeActivityAt: now,
     activeOperationIds: [],
     operations: [],
