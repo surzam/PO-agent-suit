@@ -56,6 +56,7 @@ export function createRun({ id = null, intent, role = 'product-owner', workflow 
     launchRequestId,
     interopMetadata:interopMetadata&&typeof interopMetadata==='object'?structuredClone(interopMetadata):null,
     lastRuntimeActivityAt: now,
+    lastAppliedSequence: 0,
     activeOperationIds: [],
     operations: [],
     createdAt: now,

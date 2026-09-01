@@ -8,6 +8,8 @@ import { createSuiteExecution } from '../app/execution.mjs';
 import { ensureDemoFixture } from './demo-fixture.mjs';
 import { projectObservation } from '../core/observation.mjs';
 import { createAgUiEndpoint } from '../interop/ag-ui/endpoint.mjs';
+import { acquireWorkspaceLease } from '../core/workspace-lease.mjs';
+import { readJson } from './request-body.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const publicDir = path.join(root, 'public');
@@ -20,19 +22,26 @@ async function systemSnapshot() {
   const memory = process.memoryUsage();
   return { sampledAt: new Date().toISOString(), process: { rssMiB: bytesToMiB(memory.rss), heapMiB: bytesToMiB(memory.heapUsed) }, system: { usedMiB: bytesToMiB(os.totalmem() - os.freemem()), totalMiB: bytesToMiB(os.totalmem()) }, gpu: gpu.length ? gpu : null };
 }
-async function body(req) { let text=''; for await (const chunk of req) text += chunk; return text ? JSON.parse(text) : {}; }
+const isLoopbackHost=host=>{const raw=String(host||'').replace(/^\[|\]$/g,'').toLowerCase();if(raw==='::1')return true;const value=raw.includes(':')?raw.split(':')[0]:raw;return value==='127.0.0.1'||value==='localhost'};
 
 function mime(file) {
   return ({'.html':'text/html; charset=utf-8','.js':'text/javascript; charset=utf-8','.css':'text/css; charset=utf-8','.json':'application/json; charset=utf-8','.svg':'image/svg+xml'})[path.extname(file)] || 'application/octet-stream';
 }
 
-export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace') } = {}) {
-  await ensureDemoFixture(rootDir);
+export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace'), bindHost='127.0.0.1', authToken=null } = {}) {
+  if(!isLoopbackHost(bindHost)&&!authToken)throw Object.assign(new Error('Non-loopback AgentSuite API requires an explicit auth token'),{code:'NON_LOOPBACK_AUTH_REQUIRED'});
+  let workspaceLease;
+  try{
+    workspaceLease=await acquireWorkspaceLease(rootDir);
+    await ensureDemoFixture(rootDir);
+  }catch(error){await workspaceLease?.release();throw error}
   const diagnosticsFile=path.join(rootDir,'diagnostics.jsonl');
+  const rotateDiagnostics=async()=>{const limit=5*1024*1024;const stat=await fs.stat(diagnosticsFile).catch(()=>null);if(stat?.size>limit){await fs.rm(`${diagnosticsFile}.1`,{force:true});await fs.rename(diagnosticsFile,`${diagnosticsFile}.1`)}};
   const subscribers = new Map();
   let bootId=null;
   const eventSink = async event => {
     const record={timestamp:event.at,runtimeInstanceId:bootId,runId:event.runId,eventId:event.eventId,sequence:event.sequence,operationId:event.payload?.operationId||null,stageId:event.payload?.stage||null,eventCode:event.type,reasonCode:event.payload?.reasonCode||null,durationMs:Number.isFinite(event.payload?.durationMs)?event.payload.durationMs:null,provider:event.payload?.provider||null,capability:event.payload?.capability||null};
+    await rotateDiagnostics();
     await fs.appendFile(diagnosticsFile,`${JSON.stringify(record)}\n`).catch(()=>{});
     for (const listener of subscribers.get(event.runId) || []) listener(event);
   };
@@ -132,13 +141,23 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
     cancel:async runId=>{const target=await inspect(runId);const mode=target.events.some(event=>event.type==='IntentDiscoveryRequested')?'random':'custom';return execution.runtime(target.workflow,mode).runtime.cancel(target.id)},
     artifact:async(runId,artifactId)=>{const run=await inspect(runId).catch(()=>null),metadata=run?.artifacts?.find(item=>item.id===artifactId);if(!metadata||!['DataArtifact','Narrative','Presentation'].includes(metadata.type))return null;return artifactForRun(runId,artifactId)}
   });
+  function trustedMutation(req){
+    const host=String(req.headers.host||'').toLowerCase();
+    const allowedHost=isLoopbackHost(bindHost)?/^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i.test(host):host.split(':')[0]===String(bindHost).replace(/^\[|\]$/g,'').toLowerCase();
+    if(!allowedHost)return false;
+    const origin=req.headers.origin;
+    if(origin&&!/^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i.test(origin))return false;
+    if(!isLoopbackHost(bindHost)&&req.headers['x-agentsuite-session']!==authToken)return false;
+    return true;
+  }
   async function handle(req, res) {
     const url = new URL(req.url, 'http://127.0.0.1');
+    if(['POST','PUT','PATCH','DELETE'].includes(req.method)&&!trustedMutation(req))return json(res,{error:'TRUST_BOUNDARY_REJECTED'},403);
     if(url.pathname==='/api/ag-ui'||url.pathname.startsWith('/api/ag-ui/'))return agUiEndpoint(req,res,url);
     if (req.method === 'GET' && url.pathname === '/api/health') return json(res,{ok:true, runtime:'agentsuite', capabilities:execution.capabilities()});
     if(req.method==='GET'&&url.pathname==='/api/diagnostics'){const lines=await fs.readFile(diagnosticsFile,'utf8').then(text=>text.trim().split(/\r?\n/).filter(Boolean).slice(-80).map(JSON.parse)).catch(()=>[]),runs=await allRuns();const lastFailure=[...lines].reverse().find(item=>['RunFailed','RunInterrupted','RunCancelled'].includes(item.eventCode));return json(res,{runtimeInstanceId:execution.runtimeInstanceId,currentRunId:activeForeground,activeRunId:activeForeground,lastRunId:runs[0]?.id||null,lastCompletedRunId:runs.find(run=>run.status==='completed')?.id||null,lastFailedRunId:runs.find(run=>['failed','interrupted','cancelled'].includes(run.status))?.id||null,lastFailureCode:lastFailure?.reasonCode||null,logLocation:'AgentSuite userData/workspace/diagnostics.jsonl',records:lines})}
-    if (req.method === 'POST' && url.pathname === '/api/brief/turn') return json(res,{ok:true,...await execution.briefTurn(await body(req))});
-    if (req.method === 'POST' && url.pathname === '/api/context') { const input=await body(req); if(!input.name||!input.content)return json(res,{error:'Context file requires name and content'},400); if(String(input.content).length>1_000_000)return json(res,{error:'Context file exceeds 1 MB'},413); return json(res,{ok:true,...execution.addContext({name:String(input.name),text:String(input.content)})},201); }
+    if (req.method === 'POST' && url.pathname === '/api/brief/turn') return json(res,{ok:true,...await execution.briefTurn(await readJson(req,{maxBytes:128*1024}))});
+    if (req.method === 'POST' && url.pathname === '/api/context') { const input=await readJson(req,{maxBytes:1024*1024}); if(!input.name||!input.content)return json(res,{error:'Context file requires name and content'},400); if(String(input.content).length>1_000_000)return json(res,{error:'Context file exceeds 1 MB'},413); return json(res,{ok:true,...execution.addContext({name:String(input.name),text:String(input.content)})},201); }
     if (req.method === 'GET' && url.pathname === '/api/runs') return json(res,{runs:await allRuns()});
     if (req.method === 'GET' && url.pathname === '/api/runtime/capabilities') return json(res,{capabilities:execution.capabilities()});
     if(req.method==='GET'&&url.pathname==='/api/runtime/sources')return json(res,{sources:await execution.sourceStatuses()});
@@ -156,7 +175,7 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
     if (req.method === 'GET' && runArtifact) { const value=await artifactForRun(runArtifact[1],runArtifact[2]); return value?json(res,value):json(res,{error:'Artifact not found in Run'},404); }
     if (req.method === 'POST' && url.pathname === '/api/runs') {
       return serializeLaunch(async()=>{
-      const input=await body(req); const role=input.role || 'product-owner';
+      const input=await readJson(req,{maxBytes:128*1024}); const role=input.role || 'product-owner';
       const launchRequestId=String(input.launchRequestId||'').trim();
       if(!/^[A-Za-z0-9._:-]{8,160}$/.test(launchRequestId))return json(res,{error:'launchRequestId is required'},400);
       if(launches.has(launchRequestId)){const runId=launches.get(launchRequestId);return json(res,{runId,status:(await inspect(runId)).status,idempotent:true},200)}
@@ -180,7 +199,7 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
     const rerun=url.pathname.match(/^\/api\/runs\/([^/]+)\/rerun$/);
     if (req.method === 'POST' && rerun) {
       return serializeLaunch(async()=>{
-      const input=await body(req); const source=await inspect(rerun[1]); const role=input.role || source.role;
+      const input=await readJson(req,{maxBytes:128*1024}); const source=await inspect(rerun[1]); const role=input.role || source.role;
       const launchRequestId=String(input.launchRequestId||'').trim();if(!/^[A-Za-z0-9._:-]{8,160}$/.test(launchRequestId))return json(res,{error:'launchRequestId is required'},400);
       if(launches.has(launchRequestId)){const runId=launches.get(launchRequestId);return json(res,{runId,status:(await inspect(runId)).status,idempotent:true},200)}
       if(activeForeground){const active=await inspect(activeForeground).catch(()=>null);if(active&&['created','launching','running'].includes(active.status))return json(res,{error:'ACTIVE_RUN_EXISTS',activeRunId:active.id},409);activeForeground=null}
@@ -200,12 +219,14 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
     }
     return json(res,{error:'Not found'},404);
   }
-  return { handle, runtimeFor, subscribe };
+  return { handle, runtimeFor, subscribe, close:()=>workspaceLease.release() };
 }
 
-export async function serveAgentSuite({ host='127.0.0.1', port=8080, rootDir } = {}) {
-  const api=await createAgentSuiteApi({rootDir});
-  const server=http.createServer((req,res)=>api.handle(req,res).catch(error=>{console.error(`[AgentSuite failure] ${req.method} ${req.url} ${error.message}`);json(res,{error:error.message},500);}));
-  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,host,resolve);});
+export async function serveAgentSuite({ host='127.0.0.1', port=8080, rootDir, authToken=null } = {}) {
+  const api=await createAgentSuiteApi({rootDir,bindHost:host,authToken});
+  const server=http.createServer((req,res)=>api.handle(req,res).catch(error=>{console.error(`[AgentSuite failure] ${req.method} ${req.url} ${error.message}`);json(res,{error:error.code||error.message},error.statusCode||500);}));
+  server.once('close',()=>{void api.close()});
+  try{await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,host,resolve);});}
+  catch(error){await api.close();throw error}
   const address=server.address(); console.log(`AgentSuite\nListening on http://${host}:${address.port}`); return server;
 }

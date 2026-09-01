@@ -8,6 +8,7 @@ import YAML from 'yaml';
 import { createArtifactStore } from './research/storage.mjs';
 import { createLocalSource, createWebSource, createSearxngSource } from './research/sources.mjs';
 import { createResearchService, dataFromEvidence } from './research/service.mjs';
+import { acquireWorkspaceLease } from './core/workspace-lease.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicDir = path.join(root, 'public');
@@ -16,6 +17,12 @@ const exportDir = path.resolve(process.env.PO_EXPORT_DIR || path.join(workspaceD
 const variationHistoryFile = path.join(workspaceDir, 'variation-history.json');
 const templateDir = path.join(root, 'template-library');
 const port = Number(process.env.PORT || 3000);
+const legacyHost = process.env.PO_LEGACY_HOST || '127.0.0.1';
+if (!['127.0.0.1','localhost','::1'].includes(legacyHost.replace(/^\[|\]$/g,''))) throw new Error('Legacy server is loopback-only; use the canonical AgentSuite API for remote access');
+// When imported as the canonical execution library, this legacy module must
+// not acquire a second lease for the same workspace. The standalone legacy
+// server still owns a lease when it actually serves HTTP.
+const legacyWorkspaceLease = process.env.PO_AGENT_NO_LISTEN === '1' ? null : await acquireWorkspaceLease(workspaceDir, { runtimeInstanceId:`legacy-${process.pid}-${Date.now()}` });
 const generationVersion = '3.0.0-deep-research-phase1';
 const buildTimestamp = new Date().toISOString();
 await fs.mkdir(exportDir, { recursive: true });
@@ -423,7 +430,7 @@ function slidesHtml(plan, meta, data) {
   return deckDocument(plan,meta,style,family,variant,scenes);
 }
 function deckDocument(plan,meta,style,family,variant,scenes) {
-  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(plan.topic)}</title>${templateFontLink(meta.styleId)}<style>
+  return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; object-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src data: https://fonts.gstatic.com; img-src data: blob:; connect-src 'none'; frame-src 'none'"><title>${esc(plan.topic)}</title>${templateFontLink(meta.styleId)}<style>
 :root{--bg:#071321;--ink:#f7fbff;--accent:#4f7cff;--soft:#b8f3e8;--hot:#ff805d;--font-display:Inter,system-ui,sans-serif;--font-body:Inter,system-ui,sans-serif;--font-mono:ui-monospace,monospace;${style || ''};--stage-bg:#050505;--slide-bg:var(--bg);--ease:cubic-bezier(.16,1,.3,1)}
 *{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:var(--stage-bg)}
 .deck-viewport{position:fixed;inset:0;overflow:hidden;background:var(--stage-bg)}.deck-stage{position:absolute;left:0;top:0;width:1920px;height:1080px;overflow:hidden;transform-origin:0 0;background:var(--slide-bg)}
@@ -564,10 +571,12 @@ async function run(input = {}) {
   const finished = await researchService.wait(started.generationId);
   return finished.result;
 }
-async function body(req){let raw='';for await(const chunk of req)raw+=chunk;return raw?JSON.parse(raw):{}}
+async function body(req,maxBytes=128*1024){const declared=Number(req.headers['content-length']||0);if(declared>maxBytes)throw Object.assign(new Error('Request body exceeds the allowed size'),{statusCode:413});let raw='',size=0;for await(const chunk of req){size+=Buffer.byteLength(chunk);if(size>maxBytes)throw Object.assign(new Error('Request body exceeds the allowed size'),{statusCode:413});raw+=chunk}try{return raw?JSON.parse(raw):{}}catch{throw Object.assign(new Error('Invalid JSON'),{statusCode:400})}}
 function sendJson(res,value,code=200){res.writeHead(code,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));}
+function trustedLegacyMutation(req){const host=String(req.headers.host||'').toLowerCase();if(!/^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i.test(host))return false;const origin=req.headers.origin;return !origin||/^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i.test(origin)}
 async function handle(req,res){
   const url=new URL(req.url,'http://localhost');
+  if(['POST','PUT','PATCH','DELETE'].includes(req.method)&&!trustedLegacyMutation(req))return sendJson(res,{error:'TRUST_BOUNDARY_REJECTED'},403);
   if(url.pathname==='/api/health')return sendJson(res,{ok:true,generationVersion,pid:process.pid,port:server.address()?.port || port,buildTimestamp,model:process.env.LLAMA_BASE_URL||appConfig.llm?.base_url||'http://127.0.0.1:8080/v1',sources:researchSources.map(source=>source.id)});
   if(url.pathname==='/api/brief/turn'&&req.method==='POST')return sendJson(res,{ok:true,...await researchService.briefTurn(await body(req))});
   if(url.pathname==='/api/generations'&&req.method==='POST')return sendJson(res,{ok:true,...researchService.start(await body(req))},202);
@@ -595,6 +604,7 @@ async function handle(req,res){
   }
   const requested=url.pathname==='/'?'/index.html':url.pathname;const file=path.normalize(path.join(publicDir,requested));if(!file.startsWith(publicDir))return sendJson(res,{error:'forbidden'},403);try{const data=await fs.readFile(file);res.writeHead(200,{'content-type':'text/html; charset=utf-8'});res.end(data)}catch{sendJson(res,{error:'not found'},404)}
 }
-const server=http.createServer((req,res)=>handle(req,res).catch(e=>{console.error('[api error]',e);sendJson(res,{error:e.message},500)}));
-if (process.env.PO_AGENT_NO_LISTEN !== '1') server.listen(port,()=>console.log(`PO Agent Suite ${generationVersion}: http://localhost:${server.address().port}`));
+const server=http.createServer((req,res)=>handle(req,res).catch(e=>{console.error('[api error]',e);sendJson(res,{error:e.message},e.statusCode||500)}));
+server.once('close',()=>{void legacyWorkspaceLease?.release()});
+if (process.env.PO_AGENT_NO_LISTEN !== '1') server.listen(port,legacyHost,()=>console.log(`PO Agent Suite ${generationVersion}: http://localhost:${server.address().port}`));
 export { slidesHtml, designFamily, templateTheme, templateVisualTheme, metricRows, mottoSimilarity, modelJson, narrativeMarkdown, renderResearchGeneration, researchService, artifactStore, dataFromEvidence };

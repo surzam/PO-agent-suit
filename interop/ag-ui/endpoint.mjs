@@ -1,16 +1,15 @@
 import {parseAgUiInput} from './input-adapter.mjs';
 import {isAgUiTerminal,projectAgUiRun} from './projection.mjs';
 import {serializeSse} from './serializer.mjs';
-
-async function readJson(req){let value='';for await(const chunk of req){value+=chunk;if(value.length>1_000_000)throw Object.assign(new Error('AG-UI input too large'),{code:'AG_UI_INPUT_TOO_LARGE',statusCode:413})}try{return JSON.parse(value||'{}')}catch{throw Object.assign(new Error('Invalid JSON'),{code:'AG_UI_JSON_INVALID',statusCode:400})}}
+import {readJson} from '../../api/request-body.mjs';
 const json=(res,value,status=200)=>{res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(value))};
 const cursorSequence=value=>{const match=String(value||'').match(/:(\d{8})(?::\d{2})?$/);return match?Number(match[1]):0};
 
 export function createAgUiEndpoint({inspect,observation,subscribe,launch,cancel,artifact,threadIdForRun}){
   async function stream(req,res,runId,threadId,afterEventId=''){
-    let sentSequence=cursorSequence(afterEventId),sentIds=new Set(),closed=false,unsubscribe=()=>{},chain=Promise.resolve(),heartbeat=null;
+    let sentSequence=cursorSequence(afterEventId),sentIds=new Set(),closed=false,unsubscribe=()=>{},chain=Promise.resolve(),heartbeat=null,started=false;
     res.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','cache-control':'no-cache, no-transform','connection':'keep-alive'});
-    const pump=()=>chain=chain.then(async()=>{if(closed)return;const run=await inspect(runId),view=await observation(run);for(const record of projectAgUiRun(run,{observation:view,threadId})){const framing=/^(?:RUN_|STEP_|TOOL_CALL_|STATE_SNAPSHOT)/.test(record.event.type);if(sentIds.has(record.projectedId))continue;if(!framing&&(record.sequence<sentSequence||record.sequence===sentSequence&&afterEventId&&record.projectedId<=afterEventId))continue;res.write(serializeSse(record));sentSequence=Math.max(sentSequence,record.sequence);sentIds.add(record.projectedId);if(isAgUiTerminal(record)){closed=true;if(heartbeat)clearInterval(heartbeat);unsubscribe();res.end();break}}}).catch(()=>{if(!closed){closed=true;if(heartbeat)clearInterval(heartbeat);unsubscribe();res.end()}});
+    const pump=()=>chain=chain.then(async()=>{if(closed)return;const run=await inspect(runId),view=await observation(run);for(const record of projectAgUiRun(run,{observation:view,threadId})){const framing=/^(?:RUN_|STEP_|TOOL_CALL_|STATE_SNAPSHOT)/.test(record.event.type);if(sentIds.has(record.projectedId))continue;if(!framing&&(record.sequence<sentSequence||record.sequence===sentSequence&&afterEventId&&record.projectedId<=afterEventId))continue;res.write(serializeSse(record));if(record.event.type==='RUN_STARTED')started=true;sentSequence=Math.max(sentSequence,record.sequence);sentIds.add(record.projectedId);if(isAgUiTerminal(record)){closed=true;if(heartbeat)clearInterval(heartbeat);unsubscribe();res.end();break}}}).catch(error=>{if(closed)return;try{const sequence=sentSequence+1,base={runId,eventId:`${runId}:interop:${String(sequence).padStart(8,'0')}`,sequence},safe={type:'RUN_ERROR',message:'AgentSuite interoperability stream failed',code:'AGUI_PROJECTION_ERROR',threadId,runId};if(started){res.write(`id: ${base.eventId}:01\ndata: ${JSON.stringify({type:'CUSTOM',name:'agentsuite.interop.error',value:{schemaVersion:1,...base,data:{code:'AGUI_PROJECTION_ERROR',message:'AgentSuite interoperability stream failed'}}})}\n\n`)}res.write(`id: ${base.eventId}:02\ndata: ${JSON.stringify(safe)}\n\n`)}catch{}closed=true;if(heartbeat)clearInterval(heartbeat);unsubscribe();res.end()});
     unsubscribe=subscribe(runId,()=>void pump());
     await pump();
     if(closed)return;

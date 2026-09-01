@@ -25,6 +25,7 @@
     "test:role": "node scripts/role-audit.mjs",
     "test:observation": "node scripts/observation-audit.mjs",
     "test:reliability": "node scripts/reliability-audit.mjs",
+    "test:integrity": "node scripts/integrity-audit.mjs",
     "test:ag-ui": "node scripts/ag-ui-audit.mjs",
     "app": "electron --no-sandbox electron/main.mjs",
     "launch": "bash launch.sh",

@@ -7,6 +7,8 @@ import fs from 'node:fs';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.dirname(here);
 let serverProcess;
+const gotInstanceLock=app.requestSingleInstanceLock();
+if(!gotInstanceLock)app.quit();
 
 // Electron installed inside the project cannot use its root-owned SUID helper.
 // The app is already isolated from the user's regular browser/runtime and owns
@@ -30,7 +32,7 @@ function startServer() {
     });
     let output = '';
     const logFile=path.join(app.getPath('userData'),'service.log');
-    const safeLog=chunk=>fs.appendFileSync(logFile,String(chunk).replace(/([?&](?:token|key|secret|password)=)[^&\s]+/gi,'$1[redacted]').slice(0,8192));
+    const safeLog=chunk=>{try{if(fs.existsSync(logFile)&&fs.statSync(logFile).size>5*1024*1024){try{fs.rmSync(`${logFile}.1`,{force:true})}catch{};fs.renameSync(logFile,`${logFile}.1`)}fs.appendFileSync(logFile,String(chunk).replace(/([?&](?:token|key|secret|password)=)[^&\s]+/gi,'$1[redacted]').slice(0,8192))}catch{}};
     const onData = chunk => {
       output += chunk.toString();
       const match = output.match(/http:\/\/127\.0\.0\.1:(\d+)/);
@@ -62,6 +64,6 @@ async function createWindow() {
   await win.loadURL(`http://127.0.0.1:${port}/`);
 }
 
-app.whenReady().then(createWindow).catch(error => { console.error(error); app.quit(); });
+if(gotInstanceLock){app.on('second-instance',()=>{});app.whenReady().then(createWindow).catch(error => { console.error(error); app.quit(); });}
 app.on('window-all-closed', () => { if (serverProcess) serverProcess.kill(); if (process.platform !== 'darwin') app.quit(); });
 app.on('before-quit', () => { if (serverProcess) serverProcess.kill(); });

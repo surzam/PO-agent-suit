@@ -11,6 +11,8 @@ import {createRuntime} from '../core/runtime.mjs';
 import {createHarnessRegistry} from '../core/registry.mjs';
 import {briefHarness} from '../harnesses/brief.mjs';
 import {serveAgentSuite} from '../api/agentsuite-api.mjs';
+import {createAgUiEndpoint} from '../interop/ag-ui/endpoint.mjs';
+import {Readable} from 'node:stream';
 
 const at='2026-09-01T00:00:00.000Z',runId='11111111-1111-4111-8111-111111111111';
 const makeEvent=(sequence,type,payload={})=>({id:`${runId}:${String(sequence).padStart(8,'0')}`,eventId:`${runId}:${String(sequence).padStart(8,'0')}`,sequence,type,runId,at,payload});
@@ -41,6 +43,8 @@ const interrupt=projectAgUiRun(needs).at(-1).event;assert.equal(interrupt.type,E
 const cancelled={...run,status:'cancelled',events:[makeEvent(1,'RunStarted'),makeEvent(2,'RunCancelled',{reasonCode:'user-cancelled',physicalOperationSettled:false}),makeEvent(3,'RunCancellationSettled',{reasonCode:'user-cancelled',physicalOperationSettled:true})]};
 const cancelledProjection=projectAgUiRun(cancelled);assert.equal(cancelledProjection.at(-1).event.type,EventType.RUN_ERROR);assert.ok(cancelledProjection.some(item=>item.event.name==='agentsuite.run.cancellation-settled'));
 const prestartInterrupted={...run,status:'interrupted',events:[makeEvent(1,'RunLaunching'),makeEvent(2,'RunInterrupted',{reasonCode:'runtime-interrupted'})]};assert.equal(projectAgUiRun(prestartInterrupted)[0].event.type,EventType.RUN_ERROR,'pre-start recovery remains a valid AG-UI terminal stream');
+
+const projectionFailureRun={...run,status:'running',events:[makeEvent(1,'RunStarted')]};let failureOutput='';const failureReq=Readable.from([JSON.stringify({threadId:'failure-thread',runId,observe:true,state:{},messages:[],tools:[],context:[],forwardedProps:{agentsuite:{intent:'projection failure fixture',observe:true}}})]);failureReq.method='POST';failureReq.headers={'content-type':'application/json'};const failureRes={writeHead(){},write(value){failureOutput+=value},end(value=''){failureOutput+=value}};await createAgUiEndpoint({inspect:async()=>projectionFailureRun,observation:async()=>{throw new Error('projection fixture failure')},subscribe:()=>()=>{},threadIdForRun:async()=> 'failure-thread',launch:async()=>{throw new Error('unexpected launch')},cancel:async()=>projectionFailureRun,artifact:async()=>null})(failureReq,failureRes,new URL('http://127.0.0.1/api/ag-ui'));assert.match(failureOutput,/AGUI_PROJECTION_ERROR/);assert.equal(projectionFailureRun.status,'running','AG-UI projection failure does not mutate canonical Run');
 
 const validInput={threadId:'thread-safe',runId,state:{},messages:[],tools:[],context:[],forwardedProps:{agentsuite:{mode:'random'}}};
 assert.equal(parseAgUiInput(validInput).mode,'random');assert.throws(()=>parseAgUiInput({...validInput,runId:'../../bad'}),error=>error.code==='AG_UI_RUN_ID_INVALID');assert.throws(()=>parseAgUiInput({...validInput,resume:[{interruptId:'x',status:'resolved'}]}),error=>error.code==='AG_UI_RESUME_UNSUPPORTED');

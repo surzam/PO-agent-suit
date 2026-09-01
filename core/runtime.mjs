@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { createArtifact, createEvent, createRun, validateRunId } from './contracts.mjs';
 
 const TERMINAL_STATES=new Set(['completed','failed','cancelled','interrupted']);
@@ -27,19 +28,113 @@ function resultContract(result) {
   return { artifacts: result.artifacts || [], events: result.events || [], failure: result.failure || null, halt: result.halt || null };
 }
 
-export function createRuntime({ rootDir, registry, roles = null, contextProvider = null, defaultAllowEmptyIntent = false, observability = false, eventSink = null, artifactValidators = {}, runtimeInstanceId = `runtime-${process.pid}-${Date.now()}` }) {
+export function createRuntime({ rootDir, registry, roles = null, contextProvider = null, defaultAllowEmptyIntent = false, observability = false, eventSink = null, artifactValidators = {}, runtimeInstanceId = `runtime-${process.pid}-${Date.now()}`, persistenceHooks = {} }) {
   if (!registry?.get) throw new Error('Runtime requires a Harness Registry');
   const runsDir = path.resolve(rootDir, 'runs');
   const controllers=new Map();
+  const runLocks=new Map();
+  const terminalStates=new Set(['completed','failed','cancelled','interrupted']);
+
+  async function withRunLock(runId, task){
+    const previous=runLocks.get(runId)||Promise.resolve();
+    let release;
+    const current=new Promise(resolve=>{release=resolve});
+    const chain=previous.then(()=>current);
+    runLocks.set(runId,chain);
+    await previous;
+    try{return await task()}finally{release();if(runLocks.get(runId)===chain)runLocks.delete(runId)}
+  }
+
+  async function syncDirectory(directory){
+    try{const handle=await fs.open(directory,'r');try{await handle.sync()}finally{await handle.close()}}catch{}
+  }
+
+  async function readJournal(runId){
+    const file=path.join(runsDir,runId,'events.jsonl'),text=await fs.readFile(file,'utf8').catch(error=>error?.code==='ENOENT'?'':Promise.reject(error));
+    if(!text)return [];
+    const lines=text.split('\n'),hasCompleteTail=text.endsWith('\n');if(hasCompleteTail)lines.pop();
+    const events=[];
+    for(let index=0;index<lines.length;index++){
+      if(!lines[index].trim())continue;
+      try{events.push(JSON.parse(lines[index]))}catch(error){
+        if(index===lines.length-1&&!hasCompleteTail){
+          const prefix=lines.slice(0,index).join('\n')+(index?'\n':'');await fs.truncate(file,Buffer.byteLength(prefix));break;
+        }
+        throw Object.assign(new Error(`Runtime journal is corrupt at line ${index+1}`),{code:'JOURNAL_CORRUPT',cause:error});
+      }
+    }
+    if(!hasCompleteTail&&events.length===lines.length)await fs.appendFile(file,'\n');
+    let previous=0;for(const event of events){if(!Number.isSafeInteger(event.sequence)||event.sequence<=previous)throw Object.assign(new Error('Runtime journal sequence is invalid'),{code:'JOURNAL_CORRUPT'});previous=event.sequence}
+    return events;
+  }
+
+  function applyJournalEvent(run,event,artifactMetadata){
+    const payload=event.payload||{};
+    if(event.type==='RunRequested'){run.intent=String(payload.intent??run.intent??'');run.role=payload.role||run.role;run.workflow=payload.workflow||run.workflow}
+    if(event.type==='RunLaunching')run.status='launching';
+    if(event.type==='RunStarted')run.status='running';
+    if(event.type==='RunNeedsContext'){run.status='needs-context';run.reasonCode=payload.reasonCode||'insufficient-context'}
+    if(event.type==='RunCompleted'){run.status='completed';run.reasonCode=null}
+    if(event.type==='RunFailed'){run.status='failed';run.reasonCode=payload.reasonCode||run.reasonCode||'harness-failed'}
+    if(event.type==='RunCancelled'){run.status='cancelled';run.reasonCode=payload.reasonCode||'user-cancelled'}
+    if(event.type==='RunInterrupted'){run.status='interrupted';run.reasonCode=payload.reasonCode||'runtime-interrupted'}
+    if(event.type==='ArtifactCreated'&&payload.artifactId&&!artifactMetadata.has(payload.artifactId))artifactMetadata.set(payload.artifactId,{id:payload.artifactId,type:payload.type,sourceArtifactIds:(payload.sourceArtifactIds||[]).map(String),file:payload.file||`artifacts/${payload.artifactId}.json`,...(payload.producedByOperationId?{producedByOperationId:payload.producedByOperationId}: {})});
+    if(payload.operationId){
+      run.operations=Array.isArray(run.operations)?run.operations:[];
+      let operation=run.operations.find(item=>item.operationId===payload.operationId);
+      if(!operation){operation={operationId:payload.operationId,runId:run.id,stageId:payload.stage||null,purpose:payload.purpose||payload.operation||null,startedAt:event.at,lastActivityAt:event.at,deadline:payload.deadline||null,status:operationStatus(event.type)||'requested'};run.operations.push(operation)}
+      operation.lastActivityAt=event.at;operation.deadline=operation.deadline||payload.deadline||null;operation.status=operationStatus(event.type)||operation.status;
+      if(Number.isFinite(payload.durationMs))operation.durationMs=payload.durationMs;
+      if(payload.code==='INFERENCE_TIMEOUT'||payload.code==='SOURCE_TIMEOUT')operation.status='timed-out';
+      if(payload.code==='ABORTED')operation.status='cancelled';
+      run.activeOperationIds=Array.isArray(run.activeOperationIds)?run.activeOperationIds:[];
+      if(OPERATION_START.has(event.type)&&!run.activeOperationIds.includes(payload.operationId))run.activeOperationIds.push(payload.operationId);
+      if(OPERATION_END.has(event.type))run.activeOperationIds=run.activeOperationIds.filter(id=>id!==payload.operationId);
+    }
+    run.updatedAt=event.at;run.lastRuntimeActivityAt=event.at;
+  }
+
+  async function reconcileSnapshot(run){
+    const journal=await readJournal(run.id);if(!journal.length)return run;
+    const snapshotSequence=Number(run.lastAppliedSequence||run.events?.at(-1)?.sequence||0),journalSequence=journal.at(-1).sequence;
+    const samePrefix=Array.isArray(run.events)&&run.events.length<=journal.length&&run.events.every((event,index)=>event.eventId===journal[index]?.eventId);
+    if(snapshotSequence===journalSequence&&samePrefix)return run;
+    const metadata=new Map((run.artifacts||[]).map(item=>[item.id,{...item}]));
+    for(const event of journal)applyJournalEvent(run,event,metadata);
+    const createdIds=new Set(journal.filter(event=>event.type==='ArtifactCreated').map(event=>event.payload?.artifactId).filter(Boolean));
+    run.artifacts=[...metadata.values()].filter(item=>createdIds.has(item.id)||run.reusedArtifactIds?.includes(item.id));
+    const intentMetadata=run.artifacts.find(item=>item.type==='Intent');
+    if(intentMetadata?.file){
+      const intentValue=await fs.readFile(path.join(runsDir,run.id,intentMetadata.file),'utf8').then(JSON.parse).catch(()=>null);
+      if(intentValue?.data?.question)run.intent=String(intentValue.data.question).trim();
+    }
+    run.events=journal;run.lastAppliedSequence=journalSequence;
+    await saveRun(run);return run;
+  }
+
+  async function transitionRunUnlocked(run,{to,eventType,reasonCode=null,payload={}}={}){
+      if(terminalStates.has(run.status))return false;
+      if(!['created','launching','running'].includes(run.status))return false;
+      run.status=to;run.reasonCode=reasonCode;
+      await appendEventUnlocked(run,eventType,{...payload,...(reasonCode?{reasonCode}: {})});
+      return true;
+  }
+  async function commitRunTransition(run,options={}){
+    return withRunLock(run.id,()=>transitionRunUnlocked(run,options));
+  }
 
   async function saveRun(run) {
     const target=path.join(runsDir,run.id,'run.json');
-    const temporary=path.join(runsDir,run.id,`.run-${process.pid}.tmp`);
-    await fs.writeFile(temporary,`${JSON.stringify(run,null,2)}\n`);
+    const temporary=path.join(runsDir,run.id,`.run-${process.pid}-${crypto.randomUUID()}.tmp`);
+    await persistenceHooks.beforeSnapshot?.(run);
+    const handle=await fs.open(temporary,'w');
+    try{await handle.writeFile(`${JSON.stringify(run,null,2)}\n`);await handle.sync()}finally{await handle.close()}
     await fs.rename(temporary,target);
+    await syncDirectory(path.dirname(target));
+    await persistenceHooks.afterSnapshot?.(run);
   }
 
-  async function appendEvent(run, type, payload = {}) {
+  async function appendEventUnlocked(run, type, payload = {}) {
     const safePayload = { ...payload };
     if (safePayload.displayInput && !/^(?:files|local|web|mcp|model|research|artifact|presentation)\.(?:read|open|search|infer|call|collect|create|render)\("[\p{L}\p{N} ._:/-]{1,120}"\)$/u.test(String(safePayload.displayInput))) delete safePayload.displayInput;
     for (const key of ['operationId','producedByOperationId']) {
@@ -64,11 +159,16 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     }
     if(operationId&&OPERATION_START.has(type)&&!run.activeOperationIds.includes(operationId))run.activeOperationIds.push(operationId);
     if(operationId&&OPERATION_END.has(type))run.activeOperationIds=run.activeOperationIds.filter(id=>id!==operationId);
-    await fs.appendFile(path.join(runsDir, run.id, 'events.jsonl'), `${JSON.stringify(event)}\n`);
+    await persistenceHooks.beforeJournalAppend?.(event,run);
+    const journal=await fs.open(path.join(runsDir, run.id, 'events.jsonl'),'a');
+    try{await journal.write(`${JSON.stringify(event)}\n`);await journal.sync()}finally{await journal.close()}
+    run.lastAppliedSequence=event.sequence;
     await saveRun(run);
     if (typeof eventSink === 'function') await eventSink(event, run);
     return event;
   }
+
+  async function appendEvent(run,type,payload={}){return withRunLock(run.id,()=>appendEventUnlocked(run,type,payload))}
 
   async function start({ intent, role = 'product-owner', workflow = 'brief', parentRunId = null, reusedArtifactIds = [], allowEmptyIntent = false, launchRequestId = null, proposedRunId = null, interopMetadata = null } = {}) {
     if (!allowEmptyIntent && !String(intent || '').trim()) throw new Error('A run requires an intent');
@@ -142,14 +242,14 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
       if(!metadata)throw Object.assign(new Error(`Required output is missing: ${type}`),{code:'ARTIFACT_UNAVAILABLE'});
       const value=await loadArtifact(run,metadata);
       if(!value||value.type!==type)throw Object.assign(new Error(`Required output cannot be read: ${type}`),{code:'ARTIFACT_UNAVAILABLE'});
-      if(typeof artifactValidators[type]==='function')artifactValidators[type](value);
+      if(typeof artifactValidators[type]==='function')await artifactValidators[type](value);
     }
     for(const requirement of definition.requiredMaterializations||[]){
       const metadata=[...run.artifacts].reverse().find(item=>item.type===requirement.type);
       const value=metadata?await loadArtifact(run,metadata):null;
       const materialized=value?.data?.[requirement.field];
       if(materialized==null||materialized===''||(Array.isArray(materialized)&&!materialized.length))throw Object.assign(new Error(`Required materialization is unavailable: ${requirement.type}.${requirement.field}`),{code:'ARTIFACT_UNAVAILABLE'});
-      if(value&&typeof artifactValidators[requirement.type]==='function')artifactValidators[requirement.type](value);
+      if(value&&typeof artifactValidators[requirement.type]==='function')await artifactValidators[requirement.type](value);
     }
   }
 
@@ -157,6 +257,7 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     let activeStage = null;
     const controller=new AbortController();controllers.set(run.id,{controller,run,cancellationRecorded:false});
     try {
+      if(terminalStates.has(run.status))return run;
       run.status = 'running';
       run.reasonCode=null;
       await appendEvent(run,'RunStarted',{runtimeInstanceId});
@@ -175,16 +276,19 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
         }
       }
       await verifyRequiredOutputs(run,definition);
-      run.status = 'completed';
-      run.reasonCode=null;
-      await appendEvent(run, 'RunCompleted', { artifacts: run.artifacts.map(item => item.id) });
+      await commitRunTransition(run,{to:'completed',eventType:'RunCompleted',payload:{artifacts: run.artifacts.map(item => item.id)}});
     } catch (error) {
       const reasonCode=failureReason(error),cancelled=reasonCode==='user-cancelled';
-      run.status=cancelled?'cancelled':'failed';run.reasonCode=reasonCode;
       const message=String(error.message||error);
-      if(!cancelled)await appendEvent(run, 'HarnessFailed', { harnessId: activeStage?.harnessId || 'unknown', message, code:error.code||'HARNESS_FAILED',reasonCode });
-      if(!cancelled||run.events.at(-1)?.type!=='RunCancelled')await appendEvent(run,cancelled?'RunCancelled':'RunFailed',{message,code:error.code||'HARNESS_FAILED',reasonCode,physicalOperationSettled:true});
-      else await appendEvent(run,'RunCancellationSettled',{reasonCode,physicalOperationSettled:true});
+      await withRunLock(run.id,async()=>{
+        if(cancelled && run.status==='cancelled' && run.events.some(event=>event.type==='RunCancelled')){
+          if(run.events.at(-1)?.type!=='RunCancellationSettled')await appendEventUnlocked(run,'RunCancellationSettled',{reasonCode,physicalOperationSettled:true});
+          return;
+        }
+        if(terminalStates.has(run.status))return;
+        if(!cancelled)await appendEventUnlocked(run, 'HarnessFailed', { harnessId: activeStage?.harnessId || 'unknown', message, code:error.code||'HARNESS_FAILED',reasonCode });
+        await transitionRunUnlocked(run,{to:cancelled?'cancelled':'failed',eventType:cancelled?'RunCancelled':'RunFailed',reasonCode,payload:{message,code:error.code||'HARNESS_FAILED',reasonCode,physicalOperationSettled:true}});
+      });
     } finally {
       controllers.delete(run.id);
     }
@@ -211,9 +315,18 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     const relativeFile = `artifacts/${value.id}.json`;
     value.file = relativeFile;
     const producedByOperationId = artifact.producedByOperationId || null;
-    run.artifacts.push({ id: value.id, type: value.type, sourceArtifactIds, file: relativeFile, ...(producedByOperationId ? { producedByOperationId } : {}) });
-    await fs.writeFile(path.join(runsDir, run.id, relativeFile), `${JSON.stringify(value, null, 2)}\n`);
-    await appendEvent(run, 'ArtifactCreated', { artifactId: value.id, type: value.type, ...(producedByOperationId ? { producedByOperationId } : {}) });
+    const target=path.join(runsDir, run.id, relativeFile),temporary=`${target}.tmp-${process.pid}-${crypto.randomUUID()}`;
+    await persistenceHooks.beforeArtifactWrite?.(value,run);
+    const handle=await fs.open(temporary,'w');
+    try{await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`);await handle.sync()}finally{await handle.close()}
+    await persistenceHooks.afterArtifactWrite?.(value,run);
+    await persistenceHooks.beforeArtifactRename?.(value,run);
+    await fs.rename(temporary,target);
+    await syncDirectory(path.dirname(target));
+    await persistenceHooks.afterArtifactRename?.(value,run);
+    const metadata={ id: value.id, type: value.type, sourceArtifactIds, file: relativeFile, ...(producedByOperationId ? { producedByOperationId } : {}) };
+    run.artifacts.push(metadata);
+    await appendEvent(run, 'ArtifactCreated', { artifactId: value.id, type: value.type, file:relativeFile, sourceArtifactIds, ...(producedByOperationId ? { producedByOperationId } : {}) });
     return value;
   }
 
@@ -265,14 +378,16 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
   }
 
   async function inspect(id) {
-    return JSON.parse(await fs.readFile(path.join(runsDir, id, 'run.json'), 'utf8'));
+    return reconcileSnapshot(JSON.parse(await fs.readFile(path.join(runsDir, id, 'run.json'), 'utf8')));
   }
 
   async function cancel(id){
-    const run=await inspect(id);if(TERMINAL_STATES.has(run.status))return run;
-    const active=controllers.get(id),target=active?.run||run;target.status='cancelled';target.reasonCode='user-cancelled';
-    await appendEvent(target,'RunCancelled',{reasonCode:target.reasonCode,message:'Run cancelled by user',physicalOperationSettled:!active});
-    if(active){active.cancellationRecorded=true;active.controller.abort()}
+    const run=await inspect(id);const active=controllers.get(id),target=active?.run||run;
+    await withRunLock(id,async()=>{
+      if(terminalStates.has(target.status))return;
+      await transitionRunUnlocked(target,{to:'cancelled',eventType:'RunCancelled',reasonCode:'user-cancelled',payload:{reasonCode:'user-cancelled',message:'Run cancelled by user',physicalOperationSettled:!active}});
+      if(active){active.cancellationRecorded=true;active.controller.abort()}
+    });
     return inspect(id);
   }
 
@@ -280,11 +395,15 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     await fs.mkdir(runsDir,{recursive:true});
     const entries=await fs.readdir(runsDir,{withFileTypes:true}).catch(()=>[]),recovered=[];
     for(const entry of entries.filter(item=>item.isDirectory())){
-      let run;try{run=await inspect(entry.name)}catch{continue}
+      let run;try{run=await inspect(entry.name)}catch(error){
+        if(error.code==='JOURNAL_CORRUPT'){
+          const snapshot=await fs.readFile(path.join(runsDir,entry.name,'run.json'),'utf8').then(JSON.parse).catch(()=>null);
+          if(snapshot&&!terminalStates.has(snapshot.status)){snapshot.status='interrupted';snapshot.reasonCode='journal-corrupt';snapshot.activeOperationIds=[];await saveRun(snapshot);recovered.push(snapshot.id)}
+        }
+        continue
+      }
       if(!['launching','running'].includes(run.status)||run.ownerRuntimeInstanceId===runtimeInstanceId)continue;
-      run.status='interrupted';run.reasonCode='runtime-interrupted';run.activeOperationIds=[];
-      await appendEvent(run,'RunInterrupted',{reasonCode:'runtime-interrupted',previousRuntimeInstanceId:run.ownerRuntimeInstanceId,runtimeInstanceId});
-      recovered.push(run.id);
+      await withRunLock(run.id,async()=>{if(await transitionRunUnlocked(run,{to:'interrupted',eventType:'RunInterrupted',reasonCode:'runtime-interrupted',payload:{previousRuntimeInstanceId:run.ownerRuntimeInstanceId,runtimeInstanceId}}))recovered.push(run.id);});
     }
     return recovered;
   }
