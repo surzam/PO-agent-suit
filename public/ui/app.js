@@ -1,12 +1,14 @@
 import { ObservationStore } from './observation/observation-store.js';
 import { ObservationMode } from './observation/observation-mode.js';
 import { renderInteractiveResult } from './interactive-result/renderer.js';
+import { renderDataTable } from './data-table.js';
 
 const $=selector=>document.querySelector(selector);
 const esc=value=>String(value??'').replace(/[&<>"']/g,character=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[character]));
 const TERMINAL=new Set(['completed','failed','cancelled','interrupted']);
-const outputLabels={Narrative:'Рассказ',DataArtifact:'Таблица',Presentation:'Презентация',InteractiveResult:'Интерактивный результат'};
-const statusText={created:'Подготавливаем исследование.',launching:'Создаём исследование.',running:'Исследование идёт. Откройте его, чтобы видеть текущую операцию.',completed:'Готово. Начните с интерактивного результата или выберите другой формат.',cancelled:'Исследование отменено. Незавершённые действия больше не меняют результат.',interrupted:'Исследование было прервано перезапуском AgentSuite.',failed:'Исследование не завершилось.'};
+const outputLabels={Narrative:'Рассказ',DataArtifact:'Таблица',Presentation:'Слайды',InteractiveResult:'Интерактивный результат'};
+const PRIMARY_OUTPUT_TYPES=new Set(['Narrative','DataArtifact','Presentation']);
+const statusText={created:'Подготавливаем исследование.',launching:'Создаём исследование.',running:'Исследование идёт. Откройте его, чтобы видеть текущую операцию.',completed:'Готово. Выберите: прочитать вывод, исследовать данные или открыть слайды.',cancelled:'Исследование отменено. Незавершённые действия больше не меняют результат.',interrupted:'Исследование было прервано перезапуском AgentSuite.',failed:'Исследование не завершилось.'};
 let mode='random',view='start',currentRunId=localStorage.getItem('agentsuite.currentRunId'),run=null,briefReady=false,session='session-'+crypto.randomUUID(),beforeArtifact='result',launching=false,pendingLaunchRequestId=null;
 
 const obsMode=new ObservationMode($('#observation'),{openArtifact});
@@ -106,13 +108,8 @@ async function renderResult(id=currentRunId){
   $('#cancelRun').hidden=!['created','launching','running'].includes(value.status);
   $('#newGeneration').hidden=!TERMINAL.has(value.status)&&value.status!=='needs-context';
   if(value.status==='completed'){
-    const outputs=value.artifacts.filter(item=>outputLabels[item.type]);
-    const interactive=outputs.find(item=>item.type==='InteractiveResult');
-    if(interactive){
-      const primary=document.createElement('div');primary.className='output-group primary';primary.innerHTML='<small>ОСНОВНОЙ РЕЗУЛЬТАТ</small>';appendOutputButton(primary,interactive,{primary:true});$('#resultArtifacts').append(primary);
-    }
-    const alternatives=outputs.filter(item=>item.id!==interactive?.id);
-    if(alternatives.length){const group=document.createElement('div');group.className='output-group';group.innerHTML='<small>ДРУГИЕ ФОРМАТЫ</small>';alternatives.forEach(item=>appendOutputButton(group,item));$('#resultArtifacts').append(group)}
+    const outputs=value.artifacts.filter(item=>PRIMARY_OUTPUT_TYPES.has(item.type));
+    if(outputs.length){const group=document.createElement('div');group.className='output-group primary-results';group.innerHTML='<small>РЕЗУЛЬТАТЫ</small>';outputs.forEach(item=>appendOutputButton(group,item));$('#resultArtifacts').append(group)}
     $('#resultStatus').textContent=statusText.completed;$('#ctoFork').hidden=false;return;
   }
   if(value.status==='needs-context'){
@@ -171,7 +168,7 @@ async function openArtifact(id){
     if(!response.ok)throw Error(a.error||'Artifact unavailable');
     $('#artifactTitle').textContent=outputLabels[a.type]||'Результат';content.style.display='block';
     if(a.type==='Presentation'){content.style.display='none';frame.style.display='block';frame.srcdoc=presentationHtml(a.data?.html)||'<main style="color:white;padding:3rem">Презентация не содержит HTML.</main>';frame.onload=()=>frame.contentWindow?.focus()}
-    else if(a.type==='DataArtifact'){content.className='artifact-content data-surface';content.innerHTML=`<h1>${esc(a.data.title||'Таблица')}</h1><table><thead><tr>${(a.data.columns||[]).map(value=>`<th>${esc(value)}</th>`).join('')}</tr></thead><tbody>${(a.data.rows||[]).map(row=>`<tr>${row.map(value=>`<td>${esc(value)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;}
+    else if(a.type==='DataArtifact'){content.className='artifact-content data-surface';renderDataTable(content,a,{onEvidence:evidenceId=>showEvidence(content,evidenceId).catch(error=>alert(error.message))})}
     else if(a.type==='InteractiveResult'){content.className='artifact-content interactive-result';renderInteractiveResult(content,a,{onEvidence:evidenceId=>showEvidence(content,evidenceId).catch(error=>alert(error.message))})}
     else {content.className='artifact-content narrative-surface';content.innerHTML=markdown(a.data?.content||'');}
   }catch(error){

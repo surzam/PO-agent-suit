@@ -51,8 +51,8 @@ try{
   for(const [width,height] of [[1366,768],[1440,900],[1920,1080]]){
     const measured=await measure(width,height);
     assert.deepEqual(measured.main,researchStages,`${width}×${height}: main research topology remains explicit`);
-    assert.deepEqual(measured.results,[{id:'interactive-result',canonicalStage:'interactive-result'},{id:'narrative',canonicalStage:'narrative'},{id:'data-table',canonicalStage:'data'},{id:'slides',canonicalStage:'slides'}],`${width}×${height}: result materialization topology remains explicit`);
-    assert.equal(measured.nodes.length,11,`${width}×${height}: every declared research and result node is rendered`);
+    assert.deepEqual(measured.results,[{id:'narrative',canonicalStage:'narrative'},{id:'data-table',canonicalStage:'data'},{id:'slides',canonicalStage:'slides'}],`${width}×${height}: primary result topology remains explicit`);
+    assert.equal(measured.nodes.length,10,`${width}×${height}: every declared research and primary result node is rendered`);
     assert.equal(measured.intersects,false,`${width}×${height}: Intent and telemetry do not intersect`);
     for(const node of measured.nodes){assert.ok(node.rect.left>=measured.flow.left&&node.rect.right<=measured.flow.right&&node.rect.top>=measured.flow.top&&node.rect.bottom<=measured.flow.bottom,`${width}×${height}: ${node.id} stays inside Flow`);assert.equal(node.labelFits,true,`${width}×${height}: ${node.id} label remains readable`)}
     for(let index=0;index<measured.nodes.length;index+=1)for(let next=index+1;next<measured.nodes.length;next+=1)assert.equal(overlap(measured.nodes[index].rect,measured.nodes[next].rect),false,`${width}×${height}: Flow nodes do not overlap`);
