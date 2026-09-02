@@ -1,3 +1,14 @@
+export function deriveSlideTitle(value, maxLength = 72) {
+  const claim=String(value||'').replace(/\s+/g,' ').trim();
+  if(!claim)return '';
+  if(claim.length<=maxLength)return claim;
+  const budget=Math.max(1,maxLength-1),prefix=claim.slice(0,budget+1);
+  const punctuation=Math.max(prefix.lastIndexOf('. '),prefix.lastIndexOf('; '),prefix.lastIndexOf(': '),prefix.lastIndexOf(', '));
+  const boundary=punctuation>=Math.floor(budget*.45)?punctuation+1:prefix.lastIndexOf(' ');
+  const title=claim.slice(0,Math.max(1,boundary)).replace(/[\s,;:.]+$/,'').trim();
+  return `${title}…`;
+}
+
 export function storyPlanFromSynthesis(synthesis, evidenceSet) {
   const claims = synthesis.data.keyClaims || [];
   const evidence = evidenceSet?.data?.items || [];
@@ -5,7 +16,11 @@ export function storyPlanFromSynthesis(synthesis, evidenceSet) {
   const scenes = claims.map((claim, index) => ({
     index: index + 1,
     claimId: claim.id,
-    title: claim.claim.slice(0, 72) || `Claim ${index + 1}`,
+    // A slide title is a display label, never a destructive replacement for
+    // the semantic Claim. The full Claim remains in thesis/claim for every
+    // materialization and title shortening is explicit and word-safe.
+    title: deriveSlideTitle(claim.claim) || `Claim ${index + 1}`,
+    claim: claim.claim,
     thesis: claim.claim,
     evidence: claim.evidenceIds.map(id => byId.get(id)?.claim || id),
     evidenceIds: claim.evidenceIds,

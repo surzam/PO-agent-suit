@@ -207,6 +207,13 @@ $('#prompt').onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey){event.pr
 $('#runTabs').onclick=event=>{if(event.target.dataset.view){if(event.target.dataset.view==='history')openHistory();else screen(event.target.dataset.view)}};
 $('#resultObservation').onclick=()=>screen('observation');$('#resultHistory').onclick=openHistory;$('#historyBack').onclick=()=>screen(currentRunId?'result':'start');
 $('#cancelRun').onclick=cancelRun;$('#copyDiagnostics').onclick=()=>copyDiagnostics().catch(error=>alert(error.message));$('#newGeneration').onclick=newGeneration;
-$('#artifactBack').onclick=closeArtifact;$('#artifactClose').onclick=closeArtifact;$('#windowControl').onclick=()=>closeArtifact()||(window.poDesktop?.close?.());$('#ctoFork').onclick=()=>rerun('synthesis','cto');
+$('#artifactBack').onclick=closeArtifact;$('#artifactClose').onclick=closeArtifact;
+$('#windowControl').addEventListener('click',event=>{
+  event.preventDefault();event.stopPropagation();
+  if(closeArtifact())return;
+  if(typeof window.poDesktop?.close==='function')window.poDesktop.close();
+  else window.close();
+});
+$('#ctoFork').onclick=()=>rerun('synthesis','cto');
 window.addEventListener('keydown',event=>{const mod=event.ctrlKey||event.metaKey;if(mod&&event.shiftKey&&event.key.toLowerCase()==='o'){event.preventDefault();screen(view==='observation'?'result':'observation')}if(mod&&event.key==='1'&&currentRunId){event.preventDefault();screen('result')}if(mod&&event.key==='2'&&currentRunId){event.preventDefault();screen('observation')}if(event.key==='Escape'){if(closeArtifact())return;if(view==='history')screen(currentRunId?'result':'start')}});
 if(currentRunId)attachRun(currentRunId,'result').catch(()=>newGeneration());

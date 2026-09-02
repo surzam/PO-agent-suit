@@ -248,4 +248,14 @@
 .history-list{gap:22px}.history-group{border-left:1px solid var(--accent);padding-left:16px}.history-group>header{margin:0 0 8px}.history-group>header small{color:var(--accent);font:700 9px var(--mono);letter-spacing:.1em}.history-group>header h3{margin:5px 0 0;font:600 24px/1.15 var(--display)}.history-item{padding:15px 18px}.history-item+.history-item{border-top:0}.history-item h4{margin:7px 0 4px;font:600 17px/1.15 var(--display)}
 
 /* Fullscreen shell is shared; each materialization owns its reading scale. */
-.narrative-surface{max-width:940px;margin:0 auto;padding-top:clamp(32px,6vh,72px);font-family:Georgia,serif}.narrative-surface h1{font:650 clamp(32px,4vw,54px)/1.04 var(--display);letter-spacing:-.025em}.narrative-surface h2{margin-top:38px;font:700 clamp(21px,2.1vw,30px)/1.15 var(--sans);color:var(--accent)}.narrative-surface p,.narrative-surface li{max-width:760px;font-size:clamp(16px,1.2vw,19px);line-height:1.65}.data-surface{padding-top:clamp(28px,5vh,56px)}.data-surface h1{margin:0 0 22px;font:650 clamp(28px,3.2vw,46px)/1.06 var(--display);letter-spacing:-.02em}.data-surface table{font-size:clamp(13px,1vw,16px)}.data-surface th,.data-surface td{padding:clamp(9px,1.1vw,14px)}
+.narrative-surface{max-width:940px;margin:0 auto;padding-top:clamp(32px,6vh,72px);font-family:Georgia,serif}.narrative-surface h1{font:650 clamp(32px,4vw,54px)/1.04 var(--display);letter-spacing:-.025em}.narrative-surface h2{margin-top:38px;font:700 clamp(21px,2.1vw,30px)/1.15 var(--sans);color:var(--accent)}.narrative-surface p,.narrative-surface li{max-width:760px;font-size:clamp(16px,1.2vw,19px);line-height:1.65}.data-surface{padding-top:clamp(28px,5vh,56px)}.data-surface h1{margin:0 0 22px;font:650 clamp(28px,3.2vw,46px)/1.06 var(--display);letter-spacing:-.02em}.data-surface table{font-size:clamp(13px,1.1vw,16px)}.data-surface th,.data-surface td{padding:clamp(9px,1.1vw,14px)}
+
+/* Observation is a constrained three-column instrument. Long questions and
+   result labels stay inside their own factual regions instead of overlapping. */
+.intent-strip{min-width:0}
+.intent-strip h2{font-size:clamp(15px,1.25vw,22px);line-height:1.18;white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+.rail-default,.rail-default section,.rail-default section>button{min-width:0}
+.rail-default section>button b,.rail-default section>button span{min-width:0;overflow-wrap:anywhere}
+.rail-default section>button span{line-height:1.35}
+.output-rail>button{padding-block:9px}
+.output-rail>button b{font-size:9px;line-height:1.25}

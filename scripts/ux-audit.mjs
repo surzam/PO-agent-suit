@@ -31,4 +31,8 @@ const appStyles=await fs.readFile(path.join(process.cwd(),'public/ui/app.css'),'
 assert.match(appStyles,/\.narrative-surface h1/,'Narrative owns document typography');
 assert.match(appStyles,/\.data-surface h1/,'Data owns compact table typography');
 assert.doesNotMatch(appStyles,/\.narrative-surface h1\{[^}]*6vw/,'Narrative does not inherit title-slide scale');
+assert.match(appStyles,/\.intent-strip h2\{[^}]*-webkit-line-clamp:2/,'Observation intent is constrained to its own two-line region');
+assert.match(appStyles,/\.output-rail>button/,'Observation results have a dedicated compact rail rule');
+assert.match(app,/#windowControl'\)\.addEventListener\('click'/,'window close control has an explicit click boundary');
+assert.match(app,/window\.poDesktop\?\.close/,'Electron close capability remains the preferred window-close path');
 console.log('ux audit: ask → watch → explore → verify → history · interactive tabs/filter/provenance/evidence · PASS');

@@ -19,13 +19,12 @@ const templateDir = path.join(root, 'template-library');
 const port = Number(process.env.PORT || 3000);
 const legacyHost = process.env.PO_LEGACY_HOST || '127.0.0.1';
 if (!['127.0.0.1','localhost','::1'].includes(legacyHost.replace(/^\[|\]$/g,''))) throw new Error('Legacy server is loopback-only; use the canonical AgentSuite API for remote access');
-// When imported as the canonical execution library, this legacy module must
-// not acquire a second lease for the same workspace. The standalone legacy
-// server still owns a lease when it actually serves HTTP.
-const legacyWorkspaceLease = process.env.PO_AGENT_NO_LISTEN === '1' ? null : await acquireWorkspaceLease(workspaceDir, { runtimeInstanceId:`legacy-${process.pid}-${Date.now()}` });
+// Importing this compatibility module must remain pure. The legacy workspace
+// is initialized only by an explicit application/server startup boundary.
+let legacyWorkspaceLease = null;
+let legacyWorkspaceInitialized = false;
 const generationVersion = '3.0.0-deep-research-phase1';
 const buildTimestamp = new Date().toISOString();
-await fs.mkdir(exportDir, { recursive: true });
 const appConfig = await fs.readFile(path.join(root, 'po-agent.config.yaml'), 'utf8').then(YAML.parse).catch(() => ({}));
 const variationHistory = await fs.readFile(variationHistoryFile, 'utf8').then(JSON.parse).catch(() => ({ styles: [], angles: [], stories: [] }));
 const usedStyles = new Set(Array.isArray(variationHistory.styles) ? variationHistory.styles : []);
@@ -285,29 +284,43 @@ async function persistVariationHistory(storyFingerprint, motto) {
   await fs.writeFile(variationHistoryFile, JSON.stringify(payload, null, 2));
 }
 const modelScheduler=createProviderScheduler({providerId:process.env.LLAMA_BASE_URL||'http://127.0.0.1:8080/v1'});
+const transientProviderError=error=>error?.status===502||error?.status===503||error?.status===504||/fetch failed|ECONNREFUSED|ECONNRESET|EHOSTUNREACH|ENOTFOUND|HTTP 5/i.test(`${error?.message||''} ${error?.cause?.code||''}`);
+function waitForProvider(delayMs,signal){return new Promise((resolve,reject)=>{const timer=setTimeout(done,delayMs);function done(){signal?.removeEventListener('abort',abort);resolve()}function abort(){clearTimeout(timer);signal?.removeEventListener('abort',abort);reject(Object.assign(new Error('Operation cancelled'),{code:'ABORTED'}))}signal?.addEventListener('abort',abort,{once:true})})}
 async function rawModelJson(system, user, { signal, temperature = 0.7, maxTokens = 1200, timeoutMs } = {}) {
   const base = process.env.LLAMA_BASE_URL || appConfig.llm?.base_url || 'http://127.0.0.1:8080/v1';
   const controller = new AbortController();
   let deadlineExpired=false;
-  const timer = setTimeout(() => {deadlineExpired=true;controller.abort()}, Number(timeoutMs || appConfig.llm?.timeout_ms || 300000));
+  const effectiveTimeoutMs=Number(timeoutMs || appConfig.llm?.timeout_ms || 300000);
+  const timer = setTimeout(() => {deadlineExpired=true;controller.abort()}, effectiveTimeoutMs);
   const abort = () => controller.abort();
   signal?.addEventListener('abort', abort, { once: true });
   try {
-    const response = await fetch(`${base.replace(/\/$/, '')}/chat/completions`, {
-      method: 'POST', signal: controller.signal, headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        model: process.env.LLAMA_MODEL || appConfig.llm?.model || 'local',
-        temperature: clamp(temperature, 0, 2), max_tokens: maxTokens,
-        chat_template_kwargs: { enable_thinking:false },
-        response_format: { type: 'json_object' },
-        messages: [{ role: 'system', content: system }, { role: 'user', content: user }]
-      })
-    });
-    if (!response.ok) throw new Error(`LLM endpoint returned HTTP ${response.status}`);
-    const raw = (await response.json()).choices?.[0]?.message?.content || '';
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) throw Object.assign(new Error('LLM returned no JSON object'),{code:'MALFORMED_RESPONSE'});
-    try{return JSON.parse(match[0])}catch(error){throw Object.assign(error,{code:'MALFORMED_RESPONSE'})}
+    const startedAt=Date.now(),startupGraceMs=Math.min(15000,effectiveTimeoutMs);let retryDelayMs=250;
+    while(true){
+      try {
+        const response = await fetch(`${base.replace(/\/$/, '')}/chat/completions`, {
+          method: 'POST', signal: controller.signal, headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            model: process.env.LLAMA_MODEL || appConfig.llm?.model || 'local',
+            temperature: clamp(temperature, 0, 2), max_tokens: maxTokens,
+            chat_template_kwargs: { enable_thinking:false },
+            response_format: { type: 'json_object' },
+            messages: [{ role: 'system', content: system }, { role: 'user', content: user }]
+          })
+        });
+        if (!response.ok) throw Object.assign(new Error(`LLM endpoint returned HTTP ${response.status}`),{status:response.status});
+        const raw = (await response.json()).choices?.[0]?.message?.content || '';
+        const match = raw.match(/\{[\s\S]*\}/);
+        if (!match) throw Object.assign(new Error('LLM returned no JSON object'),{code:'MALFORMED_RESPONSE'});
+        try{return JSON.parse(match[0])}catch(error){throw Object.assign(error,{code:'MALFORMED_RESPONSE'})}
+      } catch(error) {
+        if(controller.signal.aborted)throw error;
+        const remainingMs=startupGraceMs-(Date.now()-startedAt);
+        if(!transientProviderError(error)||remainingMs<=0)throw error;
+        await waitForProvider(Math.min(retryDelayMs,remainingMs),controller.signal);
+        retryDelayMs=Math.min(retryDelayMs*2,2000);
+      }
+    }
   } catch (error) {
     if (controller.signal.aborted) throw Object.assign(new Error(signal?.aborted ? 'Operation cancelled' : 'LLM request timed out'),{code:signal?.aborted?'ABORTED':deadlineExpired?'INFERENCE_TIMEOUT':'PROVIDER_FAILURE'});
     if(error.code)return Promise.reject(error);
@@ -558,7 +571,6 @@ async function renderResearchGeneration({ generationId, brief, research, data, s
 }
 
 const artifactStore = createArtifactStore(exportDir);
-await artifactStore.initialize();
 const realRoot = await fs.realpath(root);
 const configuredRoots = (await Promise.all((appConfig.research?.local?.allowed_paths || ['.']).map(async value => fs.realpath(path.resolve(root, value)).catch(() => null)))).filter(value => value && (value === realRoot || value.startsWith(`${realRoot}${path.sep}`)));
 export const researchSources = [createLocalSource({ roots:configuredRoots, maxFiles:Number(appConfig.research?.local?.max_files || 200) })];
@@ -575,14 +587,30 @@ const researchService = createResearchService({
 });
 
 async function run(input = {}) {
+  await initializeLegacyWorkspace({ acquireLease:false });
   const started = researchService.start({ origin:'random', temperature:input.temperature, style:input.style });
   const finished = await researchService.wait(started.generationId);
   return finished.result;
+}
+export async function initializeLegacyWorkspace({ acquireLease = false } = {}) {
+  if (legacyWorkspaceInitialized) return { artifactStore, lease:legacyWorkspaceLease };
+  if (acquireLease) legacyWorkspaceLease=await acquireWorkspaceLease(workspaceDir, { runtimeInstanceId:`legacy-${process.pid}-${Date.now()}` });
+  try {
+    await fs.mkdir(exportDir, { recursive:true });
+    await artifactStore.initialize();
+    legacyWorkspaceInitialized=true;
+    return { artifactStore, lease:legacyWorkspaceLease };
+  } catch (error) {
+    await legacyWorkspaceLease?.release();
+    legacyWorkspaceLease=null;
+    throw error;
+  }
 }
 async function body(req,maxBytes=128*1024){const declared=Number(req.headers['content-length']||0);if(declared>maxBytes)throw Object.assign(new Error('Request body exceeds the allowed size'),{statusCode:413});let raw='',size=0;for await(const chunk of req){size+=Buffer.byteLength(chunk);if(size>maxBytes)throw Object.assign(new Error('Request body exceeds the allowed size'),{statusCode:413});raw+=chunk}try{return raw?JSON.parse(raw):{}}catch{throw Object.assign(new Error('Invalid JSON'),{statusCode:400})}}
 function sendJson(res,value,code=200){res.writeHead(code,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(value));}
 function trustedLegacyMutation(req){const host=String(req.headers.host||'').toLowerCase();if(!/^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i.test(host))return false;const origin=req.headers.origin;return !origin||/^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/i.test(origin)}
 async function handle(req,res){
+  await initializeLegacyWorkspace({ acquireLease:false });
   const url=new URL(req.url,'http://localhost');
   if(['POST','PUT','PATCH','DELETE'].includes(req.method)&&!trustedLegacyMutation(req))return sendJson(res,{error:'TRUST_BOUNDARY_REJECTED'},403);
   if(url.pathname==='/api/health')return sendJson(res,{ok:true,generationVersion,pid:process.pid,port:server.address()?.port || port,buildTimestamp,model:process.env.LLAMA_BASE_URL||appConfig.llm?.base_url||'http://127.0.0.1:8080/v1',sources:researchSources.map(source=>source.id)});
@@ -614,5 +642,9 @@ async function handle(req,res){
 }
 const server=http.createServer((req,res)=>handle(req,res).catch(e=>{console.error('[api error]',e);sendJson(res,{error:e.message},e.statusCode||500)}));
 server.once('close',()=>{void legacyWorkspaceLease?.release()});
-if (process.env.PO_AGENT_NO_LISTEN !== '1') server.listen(port,legacyHost,()=>console.log(`PO Agent Suite ${generationVersion}: http://localhost:${server.address().port}`));
+const invokedDirectly=process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url);
+if (invokedDirectly) {
+  await initializeLegacyWorkspace({ acquireLease:true });
+  server.listen(port,legacyHost,()=>console.log(`PO Agent Suite ${generationVersion}: http://localhost:${server.address().port}`));
+}
 export { slidesHtml, designFamily, templateTheme, templateVisualTheme, resolvePresentationStyle, DEFAULT_PRESENTATION_STYLE_ID, metricRows, mottoSimilarity, modelJson, narrativeMarkdown, renderResearchGeneration, researchService, artifactStore, dataFromEvidence };

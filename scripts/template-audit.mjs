@@ -1,0 +1,38 @@
+import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { validateTemplateLayoutSpec } from '../presentation/template-layout-spec.mjs';
+import { resolveTemplateLayout } from '../presentation/template-layout-resolver.mjs';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const specDir=path.join(root,'presentation','template-specs');
+const files=(await fs.readdir(specDir)).filter(file=>file.endsWith('.json')).sort();
+const specs=await Promise.all(files.map(async file=>JSON.parse(await fs.readFile(path.join(specDir,file),'utf8'))));
+assert.equal(specs.length,5,'five reviewed native specs are present');
+assert.equal(new Set(specs.map(spec=>spec.templateId)).size,specs.length,'template IDs are unique');
+for(const spec of specs)validateTemplateLayoutSpec(spec);
+const byId=id=>specs.find(spec=>spec.templateId===id);
+assert.equal(resolveTemplateLayout({spec:byId('blue-professional'),templateId:'blue-professional',intent:'metrics',contentShape:{title:'Decision metrics',metrics:[1,2,3]}}).resolvedLayoutId,'dashboard');
+assert.equal(resolveTemplateLayout({spec:byId('retro-zine'),templateId:'retro-zine',intent:'evidence',contentShape:{title:'Evidence in context',cards:[1,2,3]}}).resolvedLayoutId,'editorial-split');
+assert.equal(resolveTemplateLayout({spec:byId('neo-grid-bold'),templateId:'neo-grid-bold',intent:'process',contentShape:{title:'Process',body:'a',columns:3}}).resolvedLayoutId,'matrix');
+const fallback=resolveTemplateLayout({spec:byId('signal'),templateId:'signal',intent:'quote',contentShape:{title:'A long unsupported quote'.repeat(5)}});
+assert.equal(fallback.layoutFallback,true,'unknown intent is explicit fallback');
+assert.throws(()=>resolveTemplateLayout({spec:byId('signal'),templateId:'unknown',intent:'metrics'}),error=>error.code==='UNKNOWN_TEMPLATE_LAYOUT');
+const unsafe=structuredClone(byId('signal'));unsafe.layouts[0].geometry.html='<script>alert(1)</script>';
+assert.throws(()=>validateTemplateLayoutSpec(unsafe),error=>error.code==='UNSAFE_TEMPLATE_LAYOUT_SPEC');
+const runExtractor=()=>spawnSync(process.execPath,['scripts/template-spec-extract.mjs','blue-professional','signal'],{cwd:root,encoding:'utf8'});
+const first=runExtractor(),second=runExtractor();assert.equal(first.status,0,first.stderr);assert.equal(second.status,0,second.stderr);assert.equal(first.stdout,second.stdout,'candidate extraction is deterministic');
+assert.match(first.stdout,/Candidate only/);
+const temp=await fs.mkdtemp(path.join(os.tmpdir(),'agentsuite-import-purity-'));
+try {
+  const probe=`import(${JSON.stringify(new URL('../server.mjs',import.meta.url).href)}).then(()=>process.stdout.write('ok')).catch(error=>{console.error(error);process.exit(1)})`;
+  const imported=spawnSync(process.execPath,['--input-type=module','--eval',probe],{cwd:temp,encoding:'utf8',env:{...process.env,PO_WORKSPACE_DIR:path.join(temp,'workspace')}});
+  assert.equal(imported.status,0,imported.stderr);assert.equal(await fs.stat(path.join(temp,'workspace')).then(()=>true).catch(()=>false),false,'import does not create workspace');
+  const boot=`import(${JSON.stringify(new URL('../server.mjs',import.meta.url).href)}).then(async module=>{await module.initializeLegacyWorkspace();process.stdout.write('ok')}).catch(error=>{console.error(error);process.exit(1)})`;
+  const initialized=spawnSync(process.execPath,['--input-type=module','--eval',boot],{cwd:temp,encoding:'utf8',env:{...process.env,PO_WORKSPACE_DIR:path.join(temp,'workspace')}});
+  assert.equal(initialized.status,0,initialized.stderr);assert.equal(await fs.stat(path.join(temp,'workspace','exports')).then(()=>true).catch(()=>false),true,'explicit startup initializes required workspace');
+} finally { await fs.rm(temp,{recursive:true,force:true}); }
+console.log(`template audit: ${specs.length} reviewed specs · secure declarative validation · deterministic extractor · import purity · ${crypto.createHash('sha256').update(first.stdout).digest('hex').slice(0,12)} · PASS`);

@@ -18,9 +18,10 @@ import { validatePresentationMaterialization } from '../harnesses/presentation-v
 
 export async function createSuiteExecution({ rootDir, eventSink = null }) {
   process.env.PO_AGENT_NO_LISTEN = '1';
-  const [{ researchService, researchSources, artifactStore, modelJson, narrativeMarkdown, slidesHtml, resolvePresentationStyle, dataFromEvidence }, { createResearchHarness }] = await Promise.all([
+  const [{ researchService, researchSources, artifactStore, modelJson, narrativeMarkdown, slidesHtml, resolvePresentationStyle, dataFromEvidence, initializeLegacyWorkspace }, { createResearchHarness }] = await Promise.all([
     import('../server.mjs'), import('../harnesses/research.mjs')
   ]);
+  await initializeLegacyWorkspace({ acquireLease:false });
   // Resolve context from the packaged application that owns this module. In
   // development this is the repository root; in an AppImage it can be an
   // asar path under process.resourcesPath. Keep only files that really exist:

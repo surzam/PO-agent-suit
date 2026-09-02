@@ -8,6 +8,7 @@ import { validatePresentationMaterialization } from '../harnesses/presentation-v
 import { createRuntime } from '../core/runtime.mjs';
 import { createHarnessRegistry } from '../core/registry.mjs';
 import { createSlidesHarness } from '../harnesses/slides.mjs';
+import { deriveSlideTitle, storyPlanFromSynthesis } from '../harnesses/legacy-story-plan.mjs';
 
 process.env.PO_AGENT_NO_LISTEN = '1';
 const { slidesHtml, designFamily, templateTheme, templateVisualTheme, resolvePresentationStyle, DEFAULT_PRESENTATION_STYLE_ID, mottoSimilarity } = await import('../server.mjs');
@@ -28,6 +29,13 @@ const data = { rows:[], numericMetrics:[['time_to_insight',12,'minutes','demo'],
 const themes = new Set(), families = new Set();
 const chartClass = { editorial:'data-lollipop', arcade:'data-pixels', brutal:'data-blocks', playful:'data-bubbles', diagrammatic:'data-line', cinematic:'data-orbit' };
 const appHtml = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+const longClaim='Отсутствие явного типа события или состояния для внешних индексов в доступном контракте нарушает понятность исследования';
+const derivedTitle=deriveSlideTitle(longClaim);
+assert.match(derivedTitle,/…$/,'long display title is explicitly abbreviated');
+assert.ok(/[\s,;:.]/.test(longClaim[derivedTitle.slice(0,-1).length]||' '),'display title ends at an original word boundary');
+const preservedPlan=storyPlanFromSynthesis({data:{keyClaims:[{id:'C-title',claim:longClaim,evidenceIds:[]}],objective:'audit',uncertainties:[]}}, {data:{items:[]}});
+assert.equal(preservedPlan.scenes[0].claim,longClaim,'full Claim remains persisted in StoryPlan');
+assert.equal(preservedPlan.scenes[0].thesis,longClaim,'full Claim remains available to the renderer');
 
 for (const slug of slugs) {
   const html = slidesHtml(plan, { styleId:slug, generationId:`audit-${slug}` }, data);
