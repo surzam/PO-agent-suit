@@ -16,7 +16,7 @@
   "scripts": {
     "dev": "node server.mjs",
     "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check electron/main.mjs && node --check electron/preload.mjs && node --check research/storage.mjs && node --check research/sources.mjs && node --check research/service.mjs && node --check interop/ag-ui/mapping.mjs && node --check interop/ag-ui/projection.mjs && node --check interop/ag-ui/serializer.mjs && node --check interop/ag-ui/input-adapter.mjs && node --check interop/ag-ui/endpoint.mjs && node --check interop/a2ui/protocol.mjs && node --check interop/a2ui/projection.mjs && node --check interop/a2ui/validator.mjs && node --check harnesses/interactive-result.mjs && node --check public/ui/interactive-result/renderer.js && node --check presentation/template-layout-spec.mjs && node --check presentation/template-layout-resolver.mjs && node --check scripts/template-spec-extract.mjs",
+    "check": "node --check server.mjs && node --check electron/main.mjs && node --check electron/preload.mjs && node --check research/storage.mjs && node --check research/sources.mjs && node --check research/service.mjs && node --check interop/ag-ui/mapping.mjs && node --check interop/ag-ui/projection.mjs && node --check interop/ag-ui/serializer.mjs && node --check interop/ag-ui/endpoint.mjs && node --check interop/a2ui/protocol.mjs && node --check interop/a2ui/projection.mjs && node --check interop/a2ui/validator.mjs && node --check harnesses/interactive-result.mjs && node --check public/ui/interactive-result/renderer.js && node --check public/ui/observation/observation-mode.js && node --check presentation/template-layout-spec.mjs && node --check presentation/template-layout-resolver.mjs && node --check scripts/template-spec-extract.mjs && node --check scripts/observation-layout-audit.mjs",
     "test:templates": "node scripts/template-audit.mjs",
     "test:model-readiness": "node scripts/model-readiness-audit.mjs",
     "test:a2ui": "node scripts/a2ui-audit.mjs",
@@ -28,6 +28,7 @@
     "test:rerun": "node scripts/rerun-audit.mjs",
     "test:role": "node scripts/role-audit.mjs",
     "test:observation": "node scripts/observation-audit.mjs",
+    "test:observation-layout": "electron --no-sandbox scripts/observation-layout-audit.mjs",
     "test:reliability": "node scripts/reliability-audit.mjs",
     "test:integrity": "node scripts/integrity-audit.mjs",
     "test:ag-ui": "node scripts/ag-ui-audit.mjs",

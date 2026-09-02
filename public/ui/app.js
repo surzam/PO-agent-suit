@@ -216,4 +216,10 @@ $('#windowControl').addEventListener('click',event=>{
 });
 $('#ctoFork').onclick=()=>rerun('synthesis','cto');
 window.addEventListener('keydown',event=>{const mod=event.ctrlKey||event.metaKey;if(mod&&event.shiftKey&&event.key.toLowerCase()==='o'){event.preventDefault();screen(view==='observation'?'result':'observation')}if(mod&&event.key==='1'&&currentRunId){event.preventDefault();screen('result')}if(mod&&event.key==='2'&&currentRunId){event.preventDefault();screen('observation')}if(event.key==='Escape'){if(closeArtifact())return;if(view==='history')screen(currentRunId?'result':'start')}});
-if(currentRunId)attachRun(currentRunId,'result').catch(()=>newGeneration());
+const observationTestMode=new URLSearchParams(location.search).has('observation-test');
+if(observationTestMode){
+  window.__AGENTSUITE_OBSERVATION_TEST__=Object.freeze({
+    render(state,meta={}){obsMode.inspector=null;obsMode.render(state,meta);screen('observation');return true;}
+  });
+}
+if(currentRunId&&!observationTestMode)attachRun(currentRunId,'result').catch(()=>newGeneration());
