@@ -1,0 +1,4 @@
+segment,accounts,median_days_to_value,activated_30d,activated_60d
+owner_assigned,25,12,21,24
+no_owner,23,29,10,17
+complex_sso,14,33,5,10

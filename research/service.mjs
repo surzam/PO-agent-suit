@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 
 const STAGES = ['brief', 'scout', 'planning', 'researching', 'validating', 'synthesizing', 'rendering', 'complete'];
 const DEFAULT_LIMITS = { timeoutMs: 10 * 60_000, maxSourceCalls: 24, maxIterationsPerDod: 4, stagnationLimit: 2, maxWebPages: 3 };
+const RESEARCH_PROFILES=Object.freeze({default:{minNeeds:2,maxNeeds:2,documentsPerNeed:2,documentChars:2000},showcase:{minNeeds:3,maxNeeds:4,documentsPerNeed:4,documentChars:5000}});
 const briefId = () => `brief-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
 const generationId = () => `gen-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
 function safeSourceMetadata(source = {}) {
@@ -109,16 +110,17 @@ export function createResearchService({ modelJson, sources = [], render, store, 
   }
 
   async function planResearch(job) {
+    const profile=RESEARCH_PROFILES[job.researchProfile]||RESEARCH_PROFILES.default;
     let value;
     for(let attempt=0;attempt<2;attempt+=1){
       const inferenceId=operationId(job,attempt?'research-plan-repair':'research-plan');
       const timeoutMs=job.budgets?.researchPlanningMs||180000,deadline=operationDeadline(timeoutMs);
       await observe(job,'InferenceRequested',{operationId:inferenceId,capability:'MODEL',purpose:'research-plan',displayInput:'model.infer("research-plan")',deadline});await observe(job,'InferenceStarted',{operationId:inferenceId,capability:'MODEL',purpose:'research-plan',displayInput:'model.infer("research-plan")',deadline});
-      try{value=await modelJson('Ты планировщик deep research для Product Owner. Верни JSON needs: 2–4 объекта {title, query, dods:[{criterion}]}. Для каждого need 1–3 конкретных критериев готовности. Запросы должны быть пригодны для локального и интернет-поиска. Не отвечай на исследовательский вопрос.',JSON.stringify(job.brief),{signal:job.controller.signal,temperature:attempt?0.15:0.35,maxTokens:attempt?650:500,timeoutMs});if(!Array.isArray(value?.needs))throw Object.assign(new Error('Research plan returned malformed structured output'),{code:'MALFORMED_RESPONSE'});await observe(job,'InferenceCompleted',{operationId:inferenceId,capability:'MODEL',purpose:'research-plan'});break}
+      try{value=await modelJson(`Ты планировщик deep research для Product Owner. Верни JSON needs: ${profile.minNeeds}–${profile.maxNeeds} объекта {title, query, dods:[{criterion}]}. Для каждого need 1–3 конкретных критериев готовности. Запросы должны быть пригодны для локального и интернет-поиска. Не отвечай на исследовательский вопрос.`,JSON.stringify({...job.brief,researchProfile:job.researchProfile,showcase:job.showcase}),{signal:job.controller.signal,temperature:attempt?0.15:0.35,maxTokens:attempt?750:job.researchProfile==='showcase'?650:500,timeoutMs});if(!Array.isArray(value?.needs))throw Object.assign(new Error('Research plan returned malformed structured output'),{code:'MALFORMED_RESPONSE'});await observe(job,'InferenceCompleted',{operationId:inferenceId,capability:'MODEL',purpose:'research-plan'});break}
       catch(error){const malformed=error.code==='MALFORMED_RESPONSE'||error instanceof SyntaxError;const code=malformed?'MALFORMED_RESPONSE':error.code||'PROVIDER_FAILURE';await observe(job,'InferenceFailed',{operationId:inferenceId,capability:'MODEL',purpose:'research-plan',code});if(malformed&&attempt===0)continue;throw Object.assign(error,{code})}
     }
-    const needs = Array.isArray(value?.needs) ? value.needs.slice(0, 2) : [];
-    if (needs.length < 2) throw new Error('Модель не сформировала исследовательский план из 2–4 потребностей');
+    const needs = Array.isArray(value?.needs) ? value.needs.slice(0,profile.maxNeeds) : [];
+    if (needs.length < profile.minNeeds) throw new Error(`Модель не сформировала исследовательский план минимум из ${profile.minNeeds} потребностей`);
     return needs.map((need, index) => ({
       title: String(need.title || `Потребность ${index + 1}`),
       query: String(need.query || `${job.brief.question} ${need.title || ''}`),
@@ -142,7 +144,7 @@ export function createResearchService({ modelJson, sources = [], render, store, 
           const deadline=operationDeadline(source.operationTimeoutMs);
           await observe(job, 'CapabilityRequested', { operationId:searchId, capability:source.id.toUpperCase(), provider:source.provider||source.id, operation:'search', displayInput,deadline });
           await observe(job, 'CapabilityStarted', { operationId:searchId, capability:source.id.toUpperCase(), provider:source.provider||source.id, operation:'search', displayInput,deadline });
-          let found = await source.search({ query: `${need.query} ${job.brief.question}`, limit: 4, signal: job.controller.signal });
+          let found = await source.search({ query: `${job.showcase?.id||''} ${need.query} ${job.brief.question}`, limit:job.researchProfile==='showcase'?8:4, signal: job.controller.signal });
           // A conversational question often contains no repository terms. Keep the
           // run useful by collecting the real product context; never invent facts.
           if (!found.length && source.id === 'local') found = await source.search({ query: 'PO Agent Suite product context', limit: 4, signal: job.controller.signal });
@@ -176,15 +178,18 @@ export function createResearchService({ modelJson, sources = [], render, store, 
         continue;
       }
       const uniqueDocuments=[...new Map(documents.map(doc=>[doc.sourceId||doc.sourceUri||doc.sourceTitle,doc])).values()];
-      const sourceList = uniqueDocuments.slice(0, 2).map((doc, index) => ({ ref: `S${index + 1}`, sourceId:doc.sourceId || `${doc.sourceKind || 'source'}:${index + 1}`, sourceUri: doc.sourceUri, sourceTitle: doc.sourceTitle, sourceKind: doc.sourceKind, text: doc.text.slice(0, 2000) }));
+      const profile=RESEARCH_PROFILES[job.researchProfile]||RESEARCH_PROFILES.default;
+      const sourceList = uniqueDocuments.slice(0,profile.documentsPerNeed).map((doc, index) => ({ ref: `S${index + 1}`, sourceId:doc.sourceId || `${doc.sourceKind || 'source'}:${index + 1}`, sourceUri: doc.sourceUri, sourceTitle: doc.sourceTitle, sourceKind: doc.sourceKind, text: doc.text.slice(0,profile.documentChars) }));
       await observe(job,'ResearchProgressed',{phase:'evidence-extraction',batch:needIndex+1,batches:needs.length,sourcesRead:documentCache.size,evidenceAccepted:evidence.length});
       emit(job, 'researching', `Извлекаю Evidence из ${sourceList.length} источников`, { sourceCalls, evidence:evidence.length, sources:activeSources.map(source => source.id), capability:'MODEL' });
       let extracted;
       for(let attempt=0;attempt<2;attempt+=1){const extractionId=operationId(job,attempt?'evidence-extraction-repair':'evidence-extraction'),timeoutMs=job.budgets?.evidenceExtractionMs||240000,deadline=operationDeadline(timeoutMs);await observe(job,'InferenceRequested',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction',displayInput:'model.infer("evidence-extraction")',deadline});await observe(job,'InferenceStarted',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction',displayInput:'model.infer("evidence-extraction")',deadline});try{extracted=await modelJson('Ты извлекаешь Evidence из предоставленных источников. Верни JSON evidence: [{claim,quote,sourceRef,confidence,kind}], conflicts, unknowns. Используй только sourceRef из списка. claim должен быть проверяемым и не содержать новых чисел. confidence: direct|corroborated|inferred|conflicted; kind: fact|interpretation|unknown. Цитата должна быть дословным коротким фрагментом или пустой.',JSON.stringify({brief:job.brief,need,sources:sourceList}),{signal:job.controller.signal,temperature:0.1,maxTokens:attempt?600:450,timeoutMs});if(!Array.isArray(extracted?.evidence))throw Object.assign(new Error('Evidence extraction returned malformed structured output'),{code:'MALFORMED_RESPONSE'});await observe(job,'InferenceCompleted',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction'});break}catch(error){const malformed=error.code==='MALFORMED_RESPONSE'||error instanceof SyntaxError,code=malformed?'MALFORMED_RESPONSE':error.code||'PROVIDER_FAILURE';await observe(job,'InferenceFailed',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction',code});if(malformed&&attempt===0)continue;throw Object.assign(error,{code})}}
       const evidenceBeforeExtraction = evidence.length;
       for (const item of Array.isArray(extracted?.evidence) ? extracted.evidence : []) {
+        if(job.researchProfile==='showcase'&&evidence.length>=16)break;
         const source = sourceList.find(candidate => candidate.ref === item.sourceRef);
         if (!source || !String(item.claim || '').trim()) continue;
+        if(evidence.some(existing=>existing.sourceId===source.sourceId&&existing.claim===String(item.claim).trim()))continue;
         const id = `E${String(evidence.length + 1).padStart(3, '0')}`;
         evidence.push({ id, claim: String(item.claim).trim(), quote: String(item.quote || '').trim(), sourceId:source.sourceId, sourceUri: source.sourceUri, sourceTitle: source.sourceTitle, sourceKind: source.sourceKind, retrievedAt: new Date().toISOString(), confidence: ['direct', 'corroborated', 'inferred', 'conflicted'].includes(item.confidence) ? item.confidence : 'inferred', kind: ['fact', 'interpretation', 'unknown'].includes(item.kind) ? item.kind : 'fact' });
         need.dods.forEach(dod => { dod.evidenceIds.push(id); dod.findings.push(String(item.claim).trim()); });
@@ -329,14 +334,14 @@ export function createResearchService({ modelJson, sources = [], render, store, 
     }
   }
 
-  function start({ sessionId = 'default', origin, mode, temperature = 0.7, style, observe:observer, createOperationId, brief, researchOnly = false, signal, budgets={} } = {}) {
+  function start({ sessionId = 'default', origin, mode, temperature = 0.7, style, observe:observer, createOperationId, brief, researchOnly = false, signal, budgets={},researchProfile='default',showcase=null } = {}) {
     const current = session(sessionId);
     if (brief && typeof brief === 'object') { current.brief=cleanBrief(brief,'user',[{role:'user',content:brief.question}]); current.ready=true; }
     const selectedOrigin = origin || (current.ready && current.brief ? 'user' : 'random');
     if (selectedOrigin === 'user' && !current.brief) throw new Error('Сначала сформируйте исследовательский заказ в чате');
     const id = generationId();
     const selectedMode = mode || (selectedOrigin === 'random' ? 'random' : 'deep');
-    const job = { generationId: id, mode:selectedMode, state: 'brief', progress: null, brief: selectedOrigin === 'user' ? current.brief : null, result: null, error: null, failureCause:null, requiredContext:[], sourceFailures:0, observe:observer, createOperationId, operationOrdinal:0, events: [], listeners: new Set(), controller: new AbortController(), deadline: Date.now() + config.timeoutMs,deadlineExpired:false,budgets, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const job = { generationId: id, mode:selectedMode, state: 'brief', progress: null, brief: selectedOrigin === 'user' ? current.brief : null, result: null, error: null, failureCause:null, requiredContext:[], sourceFailures:0, observe:observer, createOperationId, operationOrdinal:0, events: [], listeners: new Set(), controller: new AbortController(), deadline: Date.now() + config.timeoutMs,deadlineExpired:false,budgets,researchProfile:RESEARCH_PROFILES[researchProfile]?researchProfile:'default',showcase,createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
     if(signal){if(signal.aborted)job.controller.abort();else signal.addEventListener('abort',()=>job.controller.abort(),{once:true})}
     jobs.set(id, job);
     const deadlineTimer=setTimeout(()=>{job.deadlineExpired=true;job.controller.abort()},config.timeoutMs);
@@ -366,7 +371,7 @@ export function dataFromEvidence(brief, research) {
     rows: facts.map(item => [item.id, item.claim, item.sourceTitle, item.confidence]),
     insights: (research.needs || []).flatMap(need => need.dods.flatMap(dod => dod.findings.slice(0, 2))),
     sources: [...new Set(research.evidence.map(item => item.sourceUri))],
-    sourceKind: research.evidence.some(item => item.sourceKind === 'web') ? 'uploaded-context' : 'local-index',
+    sourceKind: research.evidence.some(item => item.sourceKind === 'example') ? 'example' : research.evidence.some(item => item.sourceKind === 'web') ? 'uploaded-context' : 'local-index',
     numericMetrics: [
       ['evidence_count', facts.length, 'проверяемых фактов', 'из текущего ResearchArtifact'],
       ['source_count', sourceCount, 'локальных или web-источников', 'из текущего ResearchArtifact'],

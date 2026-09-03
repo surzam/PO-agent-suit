@@ -8,7 +8,7 @@ import pdf from 'pdf-parse/lib/pdf-parse.js';
 import crypto from 'node:crypto';
 
 const SUPPORTED = /\.(md|markdown|txt|json|csv|tsv|ya?ml|js|mjs|cjs|ts|tsx|jsx|html|css|py|go|rs|java|kt|sql|pdf)$/i;
-const EXCLUDED_DIRS = new Set(['.git', 'node_modules', 'skills', 'tests', 'test', 'scripts', 'public', 'workspace', 'exports', 'graphify-out', '.opencode', '.codex', 'dist', 'build']);
+const EXCLUDED_DIRS = new Set(['.git', 'node_modules', 'skills', 'tests', 'test', 'scripts', 'public', 'workspace', 'exports', 'showcase', 'graphify-out', '.opencode', '.codex', 'dist', 'build']);
 const EXCLUDED_FILES = /^(AGENTS\.md|README\.md|package-lock\.json|\.env(?:\..*)?|.*\.(?:pem|key|p12|pfx))$/i;
 const stableSourceId=(kind,identity)=>`${kind}:${crypto.createHash('sha256').update(String(identity)).digest('hex').slice(0,24)}`;
 
@@ -103,8 +103,8 @@ export function createLocalSource({ roots, maxFiles = 200 } = {}) {
   }
   return {
     id: 'local',
-    describeConfiguration() { return { id:'local', kind:'local', roots:(roots || []).map((root,index)=>({ id:index ? `project-${index + 1}` : 'project', label:index ? path.basename(root) : 'PROJECT', kind:'project' })), sources:added.map(item=>({ sourceId:stableSourceId('local-added',item.relative), sourceKind:'local', safeDisplayName:path.basename(item.relative), contextRootId:'user-added', state:'available' })) }; },
-    addDocument({ name, text }) { const relative=`added/${String(name||'context.txt').replace(/[^\p{L}\p{N}._-]/gu,'_').slice(0,96)}`; added.push({file:relative,relative,size:String(text||'').length,text:String(text||'').slice(0,180000)}); },
+    describeConfiguration() { return { id:'local', kind:'local', roots:(roots || []).map((root,index)=>({ id:index ? `project-${index + 1}` : 'project', label:index ? path.basename(root) : 'PROJECT', kind:'project' })), sources:added.map(item=>({ sourceId:stableSourceId(item.sourceKind==='example'?'example':'local-added',item.relative), sourceKind:item.sourceKind||'local', safeDisplayName:path.basename(item.relative), contextRootId:item.sourceKind==='example'?'showcase':'user-added', state:'available' })) }; },
+    addDocument({ name, text,sourceKind='local' }) { const kind=sourceKind==='example'?'example':'local',relative=`${kind==='example'?'showcase-added':'added'}/${String(name||'context.txt').replace(/[^\p{L}\p{N}._/-]/gu,'_').slice(0,140)}`,value={file:relative,relative,size:String(text||'').length,text:String(text||'').slice(0,180000),sourceKind:kind};const index=added.findIndex(item=>item.relative===relative);if(index>=0)added[index]=value;else added.push(value); },
     async search({ query, limit = 8 }) {
       const needles = terms(query);
       return ([...await index(),...added]).map(item => {
@@ -112,10 +112,10 @@ export function createLocalSource({ roots, maxFiles = 200 } = {}) {
         const score = needles.reduce((sum, word) => sum + (haystack.includes(word) ? 1 : 0), 0);
         return { ...item, score };
       }).filter(item => item.score > 0).sort((a, b) => b.score - a.score || a.relative.localeCompare(b.relative)).slice(0, limit).map(item => ({
-        sourceId: stableSourceId(item.relative.startsWith('added/')?'local-added':'local',item.relative),
+        sourceId: stableSourceId(item.sourceKind==='example'||item.relative.startsWith('showcase/')||item.relative.startsWith('showcase-added/')?'example':item.relative.startsWith('added/')?'local-added':'local',item.relative),
         sourceUri: `local://${item.relative}`,
         sourceTitle: item.relative,
-        sourceKind: 'local',
+        sourceKind: item.sourceKind==='example'||item.relative.startsWith('showcase/')||item.relative.startsWith('showcase-added/')?'example':'local',
         text: item.text.slice(0, 12000)
       }));
     }

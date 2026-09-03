@@ -16,7 +16,8 @@ export const briefHarness = Object.freeze({
         workflow: run.workflow,
         goal: 'Собрать проверяемую основу для workflow',
         constraints: ['Headless local runtime', 'Без выдуманных фактов'],
-        expectedDecision: 'Определить следующий обоснованный шаг'
+        expectedDecision: intent?.data?.expectedDecision || 'Определить следующий обоснованный шаг',
+        ...(intent?.data?.showcase?{showcase:{...intent.data.showcase},context:intent.data.showcase.description,audience:'Product Owner и продуктовая команда',successCriteria:['Решение опирается на несколько независимых источников','Неизвестности и противоречия сохранены'],timeHorizon:'Горизонт указан в демонстрационных источниках'}:{})
       } }],
       events: [{ type: 'BriefCreated', payload: { question: run.intent } }]
     };

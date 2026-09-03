@@ -13,12 +13,14 @@ export function createResearchHarness({ researchService, artifactStore }) {
     produces: ['EvidenceCollected', 'ResearchCompleted'],
     inputs: ['Intent', 'Brief'],
     outputs: ['EvidenceSet'],
-    async execute({ run, artifacts, signal, config = {}, observe = async () => {}, createOperationId }) {
+    async execute({ run, artifacts, context = {}, signal, config = {}, observe = async () => {}, createOperationId }) {
       const brief = artifacts.find(item => item.type === 'Brief');
       const intent = artifacts.find(item => item.type === 'Intent');
       if (!brief) throw new Error('Research Harness requires a Brief artifact');
       const sessionId = `runtime-${run.id}`;
-      const started = researchService.start({ sessionId, origin:'user', mode:'deep', brief:brief.data, temperature:config.temperature, style:config.style, observe, createOperationId, researchOnly:true,signal });
+      const researchProfile=context.showcase?.researchProfile||brief.data.showcase?.researchProfile||'default';
+      if(context.showcase)for(const document of context.showcaseDocuments||[])researchService.addContext({name:`${context.showcase.id}/${document.file.split('/').slice(2).join('/')}`,text:document.content,sourceKind:'example'});
+      const started = researchService.start({ sessionId, origin:'user', mode:'deep', brief:brief.data,researchProfile,showcase:context.showcase||brief.data.showcase||null,temperature:config.temperature, style:config.style, observe, createOperationId, researchOnly:true,signal });
       const finished = await researchService.wait(started.generationId);
       if (finished.state === 'needs-context') {
         const cause=finished.failureCause || 'insufficient-context';
@@ -36,7 +38,7 @@ export function createResearchHarness({ researchService, artifactStore }) {
           intentArtifactId: intent?.id || brief.data.intentArtifactId || null,
           items: evidence,
           summary: `Legacy Research собрал ${evidence.length} Evidence из ${new Set(evidence.map(item => item.sourceUri)).size} источников.`,
-          metadata: { legacyGenerationId: started.generationId, conflicts: research.conflicts || [], unknowns: research.unknowns || [], needs: research.needs || [], sourceStats: research.sourceStats || {}, sourceCalls: research.sourceCalls || [] }
+          metadata: { legacyGenerationId: started.generationId, conflicts: research.conflicts || [], unknowns: research.unknowns || [], needs: research.needs || [], sourceStats: research.sourceStats || {}, sourceCalls: research.sourceCalls || [],researchProfile,showcase:context.showcase||brief.data.showcase||null }
         } }],
         events: [
           { type: 'EvidenceCollected', payload: { count: evidence.length, evidenceIds:evidence.map(item=>item.id), sourceCount:new Set(evidence.map(item=>item.sourceUri)).size, sources:[...new Map(evidence.map(item=>[item.sourceId || item.sourceUri,{ sourceId:item.sourceId || item.sourceUri, sourceKind:item.sourceKind, safeDisplayName:item.sourceTitle, evidenceIds:[item.id] }])).values()] } },

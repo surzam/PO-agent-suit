@@ -9,12 +9,14 @@ import { createSynthesisHarness } from '../harnesses/synthesis.mjs';
 import { createNarrativeHarness } from '../harnesses/narrative.mjs';
 import { createDataHarness } from '../harnesses/data.mjs';
 import { createSlidesHarness } from '../harnesses/slides.mjs';
+import { createPresentationStoryPlannerHarness } from '../harnesses/presentation-story-planner.mjs';
 import { createInteractiveResultHarness } from '../harnesses/interactive-result.mjs';
 import { roleRegistry } from '../roles/registry.mjs';
 import { intentHarness } from '../harnesses/intent.mjs';
 import { createIntentDiscoveryHarness } from '../harnesses/intent-discovery.mjs';
 import { workflowDefinition } from './workflows.mjs';
 import { validatePresentationMaterialization } from '../harnesses/presentation-validation.mjs';
+import { loadShowcaseCatalog,selectShowcasePack } from '../showcase/catalog.mjs';
 
 export async function createSuiteExecution({ rootDir, eventSink = null }) {
   process.env.PO_AGENT_NO_LISTEN = '1';
@@ -45,6 +47,7 @@ export async function createSuiteExecution({ rootDir, eventSink = null }) {
       }
     }
   }
+  const showcaseCatalog=await loadShowcaseCatalog();
   const runtimeInstanceId=`runtime-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
   const runtimeCache=new Map();
   function setup(workflow, mode = 'custom') {
@@ -58,6 +61,7 @@ export async function createSuiteExecution({ rootDir, eventSink = null }) {
     if(stages.some(stage=>stage.id==='data'))registry.register(createDataHarness({dataFromEvidence}));
     if(stages.some(stage=>stage.id==='narrative'))registry.register(createNarrativeHarness({narrativeMarkdown}));
     if(stages.some(stage=>stage.id==='slides'))registry.register(createSlidesHarness({slidesHtml,resolvePresentationStyle}));
+    if(stages.some(stage=>stage.id==='presentation-story'))registry.register(createPresentationStoryPlannerHarness());
     if(stages.some(stage=>stage.id==='interactive-result'))registry.register(createInteractiveResultHarness({modelJson}));
     return { registry, stages, definition };
   }
@@ -82,7 +86,7 @@ export async function createSuiteExecution({ rootDir, eventSink = null }) {
     runtime: (workflow, mode = 'custom') => {
       const key=`${workflow}:${mode}`;if(runtimeCache.has(key))return runtimeCache.get(key);
       const { registry, stages,definition } = setup(workflow, mode);
-      const value={ runtime:createRuntime({ rootDir, registry, roles:roleRegistry, observability:true, eventSink, artifactValidators:{Presentation:validatePresentationMaterialization}, runtimeInstanceId, defaultAllowEmptyIntent: mode === 'random', contextProvider:({ role }) => ({ availableContext:localProductContext, harnesses:registry.describe?.() || registry.list?.() || [], runtime:{ workflowStages: stages.map(stage => stage.id), artifactModel:'immutable artifacts with sourceArtifactIds' }, providerCapability:{ available:true,kind:'local-model' }, role }) }), stages,definition };
+      const value={ runtime:createRuntime({ rootDir, registry, roles:roleRegistry, observability:true, eventSink, artifactValidators:{Presentation:validatePresentationMaterialization}, runtimeInstanceId, defaultAllowEmptyIntent: mode === 'random', contextProvider:({run,role})=>{const pack=mode==='random'?selectShowcasePack(showcaseCatalog,run.launchRequestId||run.id):null;return {availableContext:pack?pack.documents:localProductContext,showcaseDocuments:pack?.documents||[],showcase:pack?{id:pack.id,name:pack.name,description:pack.description,sourceKind:'example',displayLabel:pack.displayLabel,seedKey:pack.seedKey,recommendedStyleId:pack.recommendedStyleId,researchProfile:'showcase'}:null,harnesses:registry.describe?.()||registry.list?.()||[],runtime:{workflowStages:stages.map(stage=>stage.id),artifactModel:'immutable artifacts with sourceArtifactIds'},providerCapability:{available:true,kind:'local-model'},role}} }), stages,definition };
       runtimeCache.set(key,value);return value;
     },
     runtimeInstanceId

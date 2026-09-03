@@ -13,6 +13,7 @@ import { createSynthesisHarness } from '../harnesses/synthesis.mjs';
 import { createNarrativeHarness } from '../harnesses/narrative.mjs';
 import { createDataHarness } from '../harnesses/data.mjs';
 import { createSlidesHarness } from '../harnesses/slides.mjs';
+import { createPresentationStoryPlannerHarness } from '../harnesses/presentation-story-planner.mjs';
 import { dataFromEvidence } from '../research/service.mjs';
 
 process.env.PO_AGENT_NO_LISTEN = '1';
@@ -58,9 +59,10 @@ try {
   registry.register(createNarrativeHarness({ narrativeMarkdown }));
   registry.register(createDataHarness({ dataFromEvidence }));
   registry.register(createSlidesHarness({ slidesHtml, resolvePresentationStyle }));
-  const researchRun = await runtime.run({ intent:'Проверить research boundary', role:'product-owner', workflow:'research-presentation', stages:[{ harnessId:'brief' },{ harnessId:'research', requestEvent:'ResearchRequested' },{ harnessId:'validation', requestEvent:'ValidationRequested' },{ harnessId:'synthesis', requestEvent:'SynthesisRequested' },{ harnessId:'data', requestEvent:'DataRequested' },{ harnessId:'narrative', requestEvent:'NarrativeRequested' },{ harnessId:'slides', requestEvent:'PresentationRequested' }] });
+  registry.register(createPresentationStoryPlannerHarness());
+  const researchRun = await runtime.run({ intent:'Проверить research boundary', role:'product-owner', workflow:'research-presentation', stages:[{ harnessId:'brief' },{ harnessId:'research', requestEvent:'ResearchRequested' },{ harnessId:'validation', requestEvent:'ValidationRequested' },{ harnessId:'synthesis', requestEvent:'SynthesisRequested' },{ harnessId:'data', requestEvent:'DataRequested' },{ harnessId:'presentation-story',requestEvent:'PresentationStoryRequested'},{ harnessId:'narrative', requestEvent:'NarrativeRequested' },{ harnessId:'slides', requestEvent:'PresentationRequested' }] });
   assert.equal(researchRun.status, 'completed',JSON.stringify(researchRun.events.slice(-3)));
-  assert.deepEqual(researchRun.events.map(event => event.type), ['RunRequested','RunLaunching','RunStarted','ArtifactCreated', 'BriefCreated', 'ResearchRequested', 'ArtifactCreated', 'EvidenceCollected', 'ResearchCompleted', 'ValidationRequested', 'ArtifactCreated', 'EvidenceValidated', 'ValidationCompleted', 'SynthesisRequested', 'ArtifactCreated', 'SynthesisPlanCreated', 'SynthesisCompleted', 'DataRequested', 'ArtifactCreated', 'DataCreated', 'DataCompleted', 'NarrativeRequested', 'ArtifactCreated', 'NarrativeCreated', 'NarrativeCompleted', 'PresentationRequested', 'ArtifactCreated', 'PresentationCreated', 'PresentationCompleted', 'RunCompleted']);
+  assert.deepEqual(researchRun.events.map(event => event.type), ['RunRequested','RunLaunching','RunStarted','ArtifactCreated', 'BriefCreated', 'ResearchRequested', 'ArtifactCreated', 'EvidenceCollected', 'ResearchCompleted', 'ValidationRequested', 'ArtifactCreated', 'EvidenceValidated', 'ValidationCompleted', 'SynthesisRequested', 'ArtifactCreated', 'SynthesisPlanCreated', 'SynthesisCompleted', 'DataRequested', 'ArtifactCreated', 'DataCreated', 'DataCompleted','PresentationStoryRequested','ArtifactCreated','PresentationStoryPlanned', 'NarrativeRequested', 'ArtifactCreated', 'NarrativeCreated', 'NarrativeCompleted', 'PresentationRequested', 'ArtifactCreated', 'PresentationCreated', 'PresentationCompleted', 'RunCompleted']);
   const briefArtifact = researchRun.artifacts.find(item => item.type === 'Brief');
   const evidenceArtifact = researchRun.artifacts.find(item => item.type === 'EvidenceSet');
   const validationArtifact = researchRun.artifacts.find(item => item.type === 'ValidationReport');
@@ -68,11 +70,13 @@ try {
   const narrativeArtifact = researchRun.artifacts.find(item => item.type === 'Narrative');
   const dataArtifactMeta = researchRun.artifacts.find(item => item.type === 'DataArtifact');
   const presentationArtifact = researchRun.artifacts.find(item => item.type === 'Presentation');
-  assert.ok(briefArtifact && evidenceArtifact && validationArtifact && synthesisArtifact && narrativeArtifact && dataArtifactMeta && presentationArtifact);
+  const storyArtifact = researchRun.artifacts.find(item => item.type === 'PresentationStoryPlan');
+  assert.ok(briefArtifact && evidenceArtifact && validationArtifact && synthesisArtifact && narrativeArtifact && dataArtifactMeta && storyArtifact && presentationArtifact);
   assert.deepEqual(synthesisArtifact.sourceArtifactIds, [briefArtifact.id, evidenceArtifact.id, validationArtifact.id]);
   assert.deepEqual(narrativeArtifact.sourceArtifactIds, [synthesisArtifact.id, dataArtifactMeta.id]);
   assert.deepEqual(dataArtifactMeta.sourceArtifactIds, [synthesisArtifact.id, evidenceArtifact.id, validationArtifact.id]);
-  assert.deepEqual(presentationArtifact.sourceArtifactIds, [synthesisArtifact.id, dataArtifactMeta.id]);
+  assert.deepEqual(storyArtifact.sourceArtifactIds,[synthesisArtifact.id,dataArtifactMeta.id]);
+  assert.deepEqual(presentationArtifact.sourceArtifactIds, [storyArtifact.id, dataArtifactMeta.id]);
   assert.ok(!presentationArtifact.sourceArtifactIds.includes(narrativeArtifact.id), 'Slides are independent from Narrative');
   const synthesisFile = path.join(temp, 'runs', researchRun.id, 'artifacts', synthesisArtifact.file.split('/').at(-1));
   const synthesis = JSON.parse(await fs.readFile(synthesisFile, 'utf8'));
@@ -89,7 +93,7 @@ try {
   assert.equal(dataArtifact.data.rowProvenance[0].evidenceIds[0], 'E001');
   assert.equal(dataArtifact.data.rowProvenance[0].claimIds[0], 'C001');
   assert.ok(dataArtifact.data.rowProvenance[0].rowId, 'Data rows have stable semantic identity');
-  assert.equal(dataArtifact.data.provenance.insights.every(item => item.kind === 'interpretation'), true, 'Insight is not promoted to Evidence');
+  assert.equal(dataArtifact.data.provenance.insights.every(item => ['interpretation','evidence-summary'].includes(item.kind)), true, 'Insight remains explicitly typed and never promoted to Evidence');
   const stableDataHarness=createDataHarness({dataFromEvidence});
   const stablePlan={id:'stable-plan',type:'SynthesisPlan',data:{objective:'Stable identity',keyClaims:[{id:'C1',evidenceIds:['E1','E2']}]}},stableValidation={id:'stable-validation',type:'ValidationReport',data:{valid:true,items:[{decisionId:'validation:E1',evidenceId:'E1',valid:true,status:'validated'},{decisionId:'validation:E2',evidenceId:'E2',valid:true,status:'unknown'}]}};
   const facts=[{id:'E1',claim:'one',quote:'one',kind:'fact',confidence:'direct',sourceId:'s1',sourceTitle:'one.md'},{id:'E2',claim:'two',quote:'two',kind:'fact',confidence:'direct',sourceId:'s2',sourceTitle:'two.md'}];
@@ -102,9 +106,9 @@ try {
   const presentation = JSON.parse(await fs.readFile(presentationFile, 'utf8'));
   assert.equal(presentation.data.synthesisPlanArtifactId, synthesisArtifact.id);
   assert.equal(presentation.data.dataArtifactId, dataArtifactMeta.id);
-  assert.equal(presentation.data.slides[0].claimIds[0], 'C001');
-  assert.equal(presentation.data.slides[0].evidenceIds[0], 'E001');
-  assert.ok(presentation.data.slides[0].dataRefs.rowIds.includes(dataArtifact.data.rowProvenance[0].rowId),'slide lineage references stable Data row IDs');
+  const groundedSlide=presentation.data.slides.find(slide=>slide.claimIds.includes('C001')&&slide.evidenceIds.includes('E001'));
+  assert.ok(groundedSlide,'Presentation contains a scene grounded in the canonical claim and Evidence');
+  assert.ok(groundedSlide.dataRefs.rowIds.includes(dataArtifact.data.rowProvenance[0].rowId),'slide lineage references stable Data row IDs');
   assert.match(presentation.data.html, /<section|slide/);
   const narrativeInput = {
     id:'narrative-input',
@@ -119,10 +123,11 @@ try {
   assert.doesNotMatch(narrativeResult.artifacts[0].data.content,/Скрытый факт/,'Narrative cannot recover raw EvidenceSet through an adapter');
   const slideInput = { id:'synthesis-slide-input', type:'SynthesisPlan', data:{ objective:'Проверить слайды', audience:'PO', keyClaims:[{ id:'C001', claim:'Поддержанный тезис', evidenceIds:['E001'], kind:'evidence-backed' }], uncertainties:[], requestedOutputs:[] } };
   const dataInput = { id:'data-slide-input', type:'DataArtifact', data:{ columns:['Evidence ID','Claim'],rows:[['E001','Поддержанный тезис']],provenance:{rows:[{rowId:'row-slide',rowIndex:0,kind:'fact',evidenceIds:['E001'],claimIds:['C001']}],metrics:[],insights:[]} } };
-  const slideResult = await createSlidesHarness({ slidesHtml, resolvePresentationStyle }).execute({ run:{ id:'run-slide-test' }, artifacts:[slideInput, dataInput], config:{} });
-  assert.deepEqual(slideResult.artifacts[0].sourceArtifactIds, [slideInput.id, dataInput.id]);
-  await assert.rejects(() => createSlidesHarness({ slidesHtml, resolvePresentationStyle }).execute({ run:{ id:'run-slide-missing' }, artifacts:[slideInput], config:{} }), /requires a DataArtifact/);
-  await assert.rejects(() => createSlidesHarness({ slidesHtml: () => { throw new Error('renderer unavailable'); }, resolvePresentationStyle }).execute({ run:{ id:'run-slide-failure' }, artifacts:[slideInput, dataInput], config:{} }), /renderer unavailable/);
+  const planned=(await createPresentationStoryPlannerHarness().execute({run:{id:'run-slide-test'},artifacts:[slideInput,dataInput]})).artifacts[0];planned.id='story-slide-input';
+  const slideResult = await createSlidesHarness({ slidesHtml, resolvePresentationStyle }).execute({ run:{ id:'run-slide-test' }, artifacts:[planned, dataInput], config:{} });
+  assert.deepEqual(slideResult.artifacts[0].sourceArtifactIds, [planned.id, dataInput.id]);
+  await assert.rejects(() => createSlidesHarness({ slidesHtml, resolvePresentationStyle }).execute({ run:{ id:'run-slide-missing' }, artifacts:[planned], config:{} }), /requires a DataArtifact/);
+  await assert.rejects(() => createSlidesHarness({ slidesHtml: () => { throw new Error('renderer unavailable'); }, resolvePresentationStyle }).execute({ run:{ id:'run-slide-failure' }, artifacts:[planned, dataInput], config:{} }), /renderer unavailable/);
   const failedRegistry = createHarnessRegistry([briefHarness, { id:'failing', consumes:['FailureRequested'], async execute() { throw new Error('legacy research unavailable'); } }]);
   const failedRuntime = createRuntime({ rootDir: temp, registry: failedRegistry });
   const failed = await failedRuntime.run({ intent:'Проверить failure path', stages:[{ harnessId:'brief' },{ harnessId:'failing', requestEvent:'FailureRequested' }] });

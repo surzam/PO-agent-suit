@@ -36,7 +36,9 @@ export const EVENT_TYPES = Object.freeze([
   'InteractiveResultRequested',
   'InteractiveResultCreated',
   'InteractiveResultCompleted',
-  'OptionalMaterializationFailed'
+  'OptionalMaterializationFailed',
+  'PresentationStoryRequested',
+  'PresentationStoryPlanned'
 ]);
 
 export function validateRunId(value) {

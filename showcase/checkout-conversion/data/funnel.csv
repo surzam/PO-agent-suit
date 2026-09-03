@@ -1,0 +1,5 @@
+variant,device,sessions,address_step,payment_started,purchase_completed
+control,mobile,51870,40210,35190,32731
+new,mobile,52400,38240,33410,31126
+control,desktop,28800,24750,23120,22061
+new,desktop,29110,25030,23370,22396

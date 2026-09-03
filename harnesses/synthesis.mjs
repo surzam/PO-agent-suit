@@ -46,7 +46,8 @@ export function createSynthesisHarness({ modelJson }) {
         keyClaims,
         uncertainties: Array.isArray(response?.uncertainties) ? response.uncertainties.map(String) : (evidenceSet.data.metadata?.unknowns || []).map(String),
         structure: Array.isArray(response?.structure) ? response.structure : [],
-        requestedOutputs: Array.isArray(response?.requestedOutputs) ? response.requestedOutputs.map(String) : (config.requestedOutputs || [])
+        requestedOutputs: Array.isArray(response?.requestedOutputs) ? response.requestedOutputs.map(String) : (config.requestedOutputs || []),
+        showcase:brief.data.showcase||evidenceSet.data.metadata?.showcase||null
       };
       return {
         artifacts: [{ type:'SynthesisPlan', sourceArtifactIds:[...(intent ? [intent.id] : []), brief.id, evidenceSet.id, validation.id], producedByOperationId:operationId, data }],

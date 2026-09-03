@@ -8,6 +8,7 @@ import { validatePresentationMaterialization } from '../harnesses/presentation-v
 import { createRuntime } from '../core/runtime.mjs';
 import { createHarnessRegistry } from '../core/registry.mjs';
 import { createSlidesHarness } from '../harnesses/slides.mjs';
+import { createPresentationStoryPlannerHarness } from '../harnesses/presentation-story-planner.mjs';
 import { deriveSlideTitle, storyPlanFromSynthesis } from '../harnesses/legacy-story-plan.mjs';
 
 process.env.PO_AGENT_NO_LISTEN = '1';
@@ -92,7 +93,7 @@ assert.equal(resolvePresentationStyle().styleId,DEFAULT_PRESENTATION_STYLE_ID,'d
 assert.deepEqual(resolvePresentationStyle('unknown-style').styleId,DEFAULT_PRESENTATION_STYLE_ID,'unknown style never persists as applied');
 const productionRoot=await fsp.mkdtemp(path.join(os.tmpdir(),'agentsuite-slides-'));
 try{
-  const registry=createHarnessRegistry([createSlidesHarness({slidesHtml,resolvePresentationStyle})]);
+  const registry=createHarnessRegistry([createPresentationStoryPlannerHarness(),createSlidesHarness({slidesHtml,resolvePresentationStyle})]);
   const runtime=createRuntime({rootDir:productionRoot,registry,observability:true});
   const byFamily=new Map();for(const slug of slugs)if(!byFamily.has(designFamily(slug)))byFamily.set(designFamily(slug),slug);
   assert.equal(byFamily.size,6,'six actual layout families are addressable');
@@ -101,14 +102,14 @@ try{
     const synthesis={id:`synthesis-${family}`,type:'SynthesisPlan',data:{objective:'Длинный, но реалистичный заголовок для проверки безопасной компоновки презентации',audience:'Product Owner',keyClaims:[{id:'claim-1',claim:'Проверяемый факт остаётся в безопасной области слайда.',evidenceIds:['E1'],kind:'evidence-backed'}],uncertainties:[]}};
     const dataArtifact={id:`data-${family}`,type:'DataArtifact',data:{structuredRows:[{rowId:'row-1',values:['E1','Проверяемый факт','fixture.md','direct']}],rows:[['E1','Проверяемый факт','fixture.md','direct']],numericMetrics:[['Сигнал',12,'ед.','fixture']],provenance:{rows:[{rowId:'row-1',rowIndex:0,evidenceIds:['E1'],sourceTitle:'fixture.md'}]}}};
     run.artifacts.push({id:synthesis.id,type:synthesis.type,sourceArtifactIds:[],file:'artifacts/synthesis.json'},{id:dataArtifact.id,type:dataArtifact.type,sourceArtifactIds:[],file:'artifacts/data.json'});
-    const outcome=await runtime.dispatch(run,{id:'slides',harnessId:'slides',config:{styleId}},{artifacts:[synthesis,dataArtifact]});
+    const context={artifacts:[synthesis,dataArtifact]};const planned=await runtime.dispatch(run,{id:'presentation-story',harnessId:'presentation-story'},context);const outcome=await runtime.dispatch(run,{id:'slides',harnessId:'slides',config:{styleId}},context);
     const presentation=outcome.persisted[0],saved=await runtime.inspect(run.id);
     assert.equal(presentation.data.metadata.styleId,styleId,`${family}: applied style persists`);
     assert.equal(presentation.data.metadata.layoutFamily,family,`${family}: layout family persists`);
     assert.ok(slugs.includes(presentation.data.metadata.styleId),`${family}: persisted style is indexed`);
     assert.ok(presentation.data.html.includes(`data-template="${styleId}"`),`${family}: renderer used persisted style`);
     assert.ok(presentation.data.html.includes(`family-${family}`),`${family}: renderer used expected layout family`);
-    assert.equal(saved.artifacts.find(item=>item.id===presentation.id)?.type,'Presentation',`${family}: artifact persisted through Runtime`);
+    assert.equal(saved.artifacts.find(item=>item.id===presentation.id)?.type,'Presentation',`${family}: artifact persisted through Runtime`);assert.equal(presentation.sourceArtifactIds[0],planned.persisted[0].id,`${family}: Presentation uses persisted story plan`);
 
     const longPlan={...plan,scenes:[
       {...plan.scenes[0],title:'Короткий заголовок'},
@@ -127,7 +128,7 @@ try{
   const defaultSynthesis={id:'synthesis-default',type:'SynthesisPlan',data:{objective:'Стандартная презентация',audience:'Product Owner',keyClaims:[{id:'claim-default',claim:'Стиль по умолчанию является валидным шаблоном.',evidenceIds:['E1'],kind:'evidence-backed'}],uncertainties:[]}};
   const defaultData={id:'data-default',type:'DataArtifact',data:{structuredRows:[{rowId:'row-default',values:['E1','Факт по умолчанию','fixture.md']}],rows:[['E1','Факт по умолчанию','fixture.md']],provenance:{rows:[{rowId:'row-default',rowIndex:0,evidenceIds:['E1'],sourceTitle:'fixture.md'}]}}};
   defaultRun.artifacts.push({id:defaultSynthesis.id,type:defaultSynthesis.type,sourceArtifactIds:[],file:'artifacts/synthesis.json'},{id:defaultData.id,type:defaultData.type,sourceArtifactIds:[],file:'artifacts/data.json'});
-  const defaultOutcome=await runtime.dispatch(defaultRun,{id:'slides',harnessId:'slides',config:{}},{artifacts:[defaultSynthesis,defaultData]});
+  const defaultContext={artifacts:[defaultSynthesis,defaultData]};await runtime.dispatch(defaultRun,{id:'presentation-story',harnessId:'presentation-story'},defaultContext);const defaultOutcome=await runtime.dispatch(defaultRun,{id:'slides',harnessId:'slides',config:{}},defaultContext);
   assert.equal(defaultOutcome.persisted[0].data.metadata.styleId,DEFAULT_PRESENTATION_STYLE_ID,'canonical default persists a valid template slug');
 }finally{await fsp.rm(productionRoot,{recursive:true,force:true})}
 const inlineScript = appHtml.match(/<script>([\s\S]*)<\/script>/)?.[1];

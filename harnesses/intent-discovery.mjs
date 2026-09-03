@@ -26,7 +26,7 @@ export function createIntentDiscoveryHarness({ modelJson }) {
         const status = value?.status === 'insufficient-context' ? 'insufficient-context' : 'discovered';
         const requiredContext = Array.isArray(value?.requiredContext) ? value.requiredContext.map(String).filter(Boolean) : [];
         if (status === 'insufficient-context' && !requiredContext.length) requiredContext.push('конкретные локальные факты о ситуации, которую нужно принять в решение');
-        const data = { status, question: String(value?.question || '').trim(), reason: String(value?.reason || '').trim(), relevance: String(value?.relevance || '').trim(), expectedDecision: String(value?.expectedDecision || 'Определить следующий обоснованный шаг').trim(), requiredContext };
+        const data = { status, question: String(value?.question || '').trim(), reason: String(value?.reason || '').trim(), relevance: String(value?.relevance || '').trim(), expectedDecision: String(value?.expectedDecision || 'Определить следующий обоснованный шаг').trim(), requiredContext, ...(context.showcase?{showcase:{...context.showcase}}:{}) };
         if (status === 'discovered' && !data.question) throw new Error('Intent Discovery returned an empty question');
         if (status === 'insufficient-context') return { artifacts: [{ type: 'Intent', producedByOperationId:operationId, data }], events: [{ type: 'IntentDiscoveryInsufficientContext', payload: { requiredContext, reason: data.reason } }], halt: { status: 'needs-context' } };
         return { artifacts: [{ type: 'Intent', producedByOperationId:operationId, data }], events: [{ type: 'IntentDiscovered', payload: { question: data.question } }] };

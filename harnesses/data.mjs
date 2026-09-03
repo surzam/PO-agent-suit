@@ -22,10 +22,10 @@ export function createDataHarness({ dataFromEvidence }) {
       const evidence = Array.isArray(evidenceSet.data.items) ? evidenceSet.data.items : [];
       const decisions = new Map((validation.data.items || []).map(item => [String(item.evidenceId), item]));
       const selectedIds = new Set(synthesis.data.keyClaims.flatMap(claim => claim.evidenceIds || []).map(String));
-      const selectedEvidence = evidence.filter(item => selectedIds.has(String(item.id)) && item.kind === 'fact' && decisions.get(String(item.id))?.valid !== false);
+      const selectedEvidence = evidence.filter(item => item.kind === 'fact' && decisions.get(String(item.id))?.valid !== false).sort((a,b)=>Number(selectedIds.has(String(b.id)))-Number(selectedIds.has(String(a.id)))).slice(0,24);
       const source = dataFromEvidence(
         { question: synthesis.data.objective || 'SynthesisPlan' },
-        { evidence: selectedEvidence, needs: [], sourceCalls: evidenceSet.data.metadata?.sourceCalls || 0 }
+        { evidence: selectedEvidence, needs:evidenceSet.data.metadata?.needs||[], sourceCalls:evidenceSet.data.metadata?.sourceCalls || 0 }
       );
       const claimByEvidence = new Map();
       for(const claim of synthesis.data.keyClaims)for(const id of claim.evidenceIds||[]){const key=String(id),ids=claimByEvidence.get(key)||[];ids.push(claim.id);claimByEvidence.set(key,[...new Set(ids)])}
@@ -38,7 +38,7 @@ export function createDataHarness({ dataFromEvidence }) {
       });
       const selectedEvidenceIds=selectedEvidence.map(item=>String(item.id)), selectedClaimIds=[...new Set(selectedEvidenceIds.flatMap(id=>claimByEvidence.get(id)||[]))];
       const metricProvenance=(source.numericMetrics||[]).map(metric=>{const metricKey=String(metric[0]);const evidenceDerived=['evidence_count','source_count'].includes(metricKey);return{metricId:stableId('metric',{metricKey}),metricKey,kind:evidenceDerived?'derived-metric':'runtime-metadata',origin:evidenceDerived?'evidence':'runtime',evidenceIds:evidenceDerived?selectedEvidenceIds:[],validationDecisionIds:evidenceDerived?selectedEvidenceIds.map(id=>decisions.get(id)?.decisionId).filter(Boolean):[],claimIds:evidenceDerived?selectedClaimIds:[]}});
-      const insightProvenance=(source.insights||[]).map((insight,insightIndex)=>({insightId:uniqueId(stableId('insight',{insight})),insightIndex,kind:'interpretation',evidenceIds:[],validationDecisionIds:[],claimIds:[]}));
+      const insightProvenance=(source.insights||[]).map((insight,insightIndex)=>{const matches=selectedEvidence.filter(item=>item.claim===insight),evidenceIds=matches.map(item=>String(item.id)),claimIds=[...new Set(evidenceIds.flatMap(id=>claimByEvidence.get(id)||[]))];return{insightId:uniqueId(stableId('insight',{insight})),insightIndex,kind:evidenceIds.length?'evidence-summary':'interpretation',evidenceIds,validationDecisionIds:evidenceIds.map(id=>decisions.get(id)?.decisionId).filter(Boolean),claimIds}});
       const provenance={synthesisPlanArtifactId:synthesis.id,evidenceSetArtifactId:evidenceSet.id,validationReportArtifactId:validation.id,rows:rowProvenance,metrics:metricProvenance,insights:insightProvenance};
       const structuredRows=rowProvenance.map(ref=>({rowId:ref.rowId,values:source.rows[ref.rowIndex]}));
       return {
@@ -51,7 +51,9 @@ export function createDataHarness({ dataFromEvidence }) {
           evidenceSetArtifactId:evidenceSet.id,
           validationReportArtifactId:validation.id,
           provenance,
-          rowProvenance
+          rowProvenance,
+          showcase:evidenceSet.data.metadata?.showcase||synthesis.data.showcase||null,
+          researchContext:{grounding:'unresolved',conflicts:(evidenceSet.data.metadata?.conflicts||[]).map(String).slice(0,8),unknowns:(evidenceSet.data.metadata?.unknowns||[]).map(String).slice(0,8)}
         } }],
         events: [
           { type:'DataCreated', payload:{ synthesisPlanArtifactId:synthesis.id, rows:source.rows.length } },
