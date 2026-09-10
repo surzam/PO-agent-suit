@@ -1,0 +1,6 @@
+import assert from 'node:assert/strict';
+import {adaptComposition,sameStructuralLayout,surfaceKey} from '../public/ui/session/composition-renderer.js';
+const surfaces=[{id:'surface:activity:r',kind:'activity',requiredRendererCapabilities:['activity'],lifecycle:'active'},{id:'surface:input:d',kind:'input',requiredRendererCapabilities:['input'],lifecycle:'active'}];
+const composition={primary:'surface:activity:r',supporting:[],background:['surface:input:d'],groups:[],focus:{surfaceId:'surface:activity:r',reason:'active-operation'},focusReason:'active-operation'};
+const caps={surfaces:['activity','input']};const first=adaptComposition({surfaces,composition,rendererCapabilities:caps}),keys=[];for(let i=0;i<100;i++){const next=adaptComposition({surfaces:structuredClone(surfaces),composition:structuredClone(composition),rendererCapabilities:caps});assert.equal(sameStructuralLayout(first,next),true);keys.push(next.primary[0].id);}assert.equal(new Set(keys).size,1);assert.equal(surfaceKey(surfaces[0]),'surface:surface:activity:r');
+const localDraft=adaptComposition({surfaces,composition,rendererCapabilities:caps,localUiState:{draft:'typed text'}});assert.equal(localDraft.primary[0].id,first.primary[0].id);console.log('renderer stability audit: 100 minor updates · stable primary identity · draft-safe structural signature · PASS');
