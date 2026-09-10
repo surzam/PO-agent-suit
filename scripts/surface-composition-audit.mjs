@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import {projectSurfaces} from '../interop/ag-ui/surfaces.mjs';
+import {projectSurfaceGraph} from '../interop/ag-ui/surface-graph.mjs';
+import {composeSurfaces,compositionEquivalent} from '../interop/ag-ui/composition.mjs';
+const base={session:{runId:'run-compose-1',status:'running',lastSequence:10},role:{id:'product-owner'},activity:{current:{label:'Читаю источник'},items:[]},workspace:{},research:{sources:[{sourceId:'s1',state:'opened'}],evidence:[{id:'e1',sourceId:'s1'}],validation:[{id:'v1',evidenceId:'e1'}]},outputs:{artifacts:[]},ui:{pendingInteraction:null}};
+const surfaces=projectSurfaces(base).items,graph=projectSurfaceGraph({sessionId:base.session.runId,surfaces,updatedFromSequence:10});
+const active=composeSurfaces({session:base,surfaces,graph});assert.equal(active.primary,'surface:source:s1');assert.equal(active.focus.reason,'active-operation');
+const waiting={...base,session:{...base.session,status:'waiting-for-human',lastSequence:11},ui:{pendingInteraction:{interruptId:'int-1',kind:'choice',prompt:'Choose',options:[{id:'a',label:'A'}],state:'pending'}}};
+const waitingSurfaces=projectSurfaces(waiting).items,waitingGraph=projectSurfaceGraph({sessionId:waiting.session.runId,surfaces:waitingSurfaces,updatedFromSequence:11}),waitingComposition=composeSurfaces({session:waiting,surfaces:waitingSurfaces,graph:waitingGraph});assert.equal(waitingComposition.primary,'surface:interrupt:int-1');assert.equal(waitingComposition.focus.reason,'human-interrupt');
+const results={...base,session:{...base.session,status:'completed',lastSequence:20},outputs:{artifacts:[{artifactId:'story',type:'Narrative'},{artifactId:'data',type:'DataArtifact'},{artifactId:'slides',type:'Presentation'}]}};const resultSurfaces=projectSurfaces(results).items,resultComp=composeSurfaces({session:results,surfaces:resultSurfaces});assert.equal(resultComp.groups[0].kind,'results');assert.equal(resultComp.groups[0].surfaceIds.length,3);
+const cto=composeSurfaces({session:{...base,role:{id:'cto'}},surfaces,graph,role:{id:'cto'}});assert.equal(cto.primary,active.primary);assert.deepEqual(cto.supporting,active.supporting);
+const selected=composeSurfaces({session:base,surfaces,graph,userFocus:'surface:evidence:e1'});assert.equal(selected.primary,'surface:evidence:e1');assert.equal(selected.focus.reason,'user-selection');
+assert.ok(compositionEquivalent(active,composeSurfaces({session:structuredClone(base),surfaces:structuredClone(surfaces),graph:structuredClone(graph)})));
+const source=await (await import('node:fs/promises')).readFile(new URL('../interop/ag-ui/composition.mjs',import.meta.url),'utf8');assert.doesNotMatch(source,/\b(x|y|width|height|absolute|gridColumn)\s*:/i);assert.doesNotMatch(source,/SurfaceAction|capabilityId/);console.log('surface composition audit: focus priorities · groups · role lens · local selection · deterministic rebuild · no actions/geometry · PASS');

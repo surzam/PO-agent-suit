@@ -1,6 +1,8 @@
 import {projectHumanInterrupts} from '../../core/human-interrupt.mjs';
 import {projectSurfaces} from './surfaces.mjs';
 import {displayCapabilitiesForRole} from '../../core/capabilities.mjs';
+import {projectSurfaceGraph} from './surface-graph.mjs';
+import {composeSurfaces} from './composition.mjs';
 // Live Session is a rebuildable view of Runtime journal + persisted artifacts.
 // It is intentionally pure: no session record is written and no UI choice can
 // alter Runtime truth without an acknowledged Runtime interaction.
@@ -63,7 +65,10 @@ export function createLiveSessionState(run,{observation={},threadId=null,capabil
     ui:{surfaces:['CHAT','ACTIVITY','WORKSPACE','RESULTS'],selectedSurface:'CHAT',pendingInteraction:pending?{interruptId:pending.id,kind:pending.kind,prompt:pending.prompt,options:pending.options,state:pending.state}:null,interactionHistory:interrupts.filter(item=>item.state!=='pending').map(item=>({kind:item.kind,prompt:item.prompt,state:item.state,response:item.response,resolvedAt:item.resolvedAt})),capabilities:{components:UI_COMPONENT_CATALOG,interactions:UI_INTERACTION_CATALOG,available:capabilities.filter(item=>UI_COMPONENT_CATALOG.includes(item))}},
     messages
   };
-  state.surfaceState=projectSurfaces(state,{historical:['completed','failed','cancelled','interrupted'].includes(run?.status)});return state;
+  state.surfaceState=projectSurfaces(state,{historical:['completed','failed','cancelled','interrupted'].includes(run?.status)});
+  state.surfaceGraph=projectSurfaceGraph({sessionId:state.session.runId,surfaces:state.surfaceState.items,updatedFromSequence:state.session.lastSequence});
+  state.surfaceComposition=composeSurfaces({session:state,surfaces:state.surfaceState.items,graph:state.surfaceGraph,role:state.role});
+  return state;
 }
 
 // AG-UI StateSnapshot owns the outer interoperability state. Keep deltas scoped
