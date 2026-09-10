@@ -8,7 +8,7 @@ import {composeSurfaces} from './composition.mjs';
 // alter Runtime truth without an acknowledged Runtime interaction.
 export const UI_COMPONENT_CATALOG=Object.freeze(['text','markdown','table','chart','file-tree','source','evidence','validation','timeline','diff','story','presentation','approval','choice','input','progress']);
 export const UI_INTERACTION_CATALOG=Object.freeze(['select','expand','collapse','edit','approve','reject','cancel','retry','branch','filter','sort','invoke','add-context']);
-export const UI_INTENT_CATALOG=Object.freeze(['SHOW_SOURCE','SHOW_FILE','SHOW_DIRECTORY','SHOW_EVIDENCE','SHOW_VALIDATION','SHOW_TABLE','SHOW_CHART','SHOW_RESULT','REQUEST_INPUT','REQUEST_APPROVAL','SHOW_COMPARISON','SHOW_DIFF','SHOW_PROGRESS']);
+export const UI_INTENT_CATALOG=Object.freeze(['SHOW_SOURCE','SHOW_FILE','SHOW_DIRECTORY','SHOW_EVIDENCE','SHOW_VALIDATION','SHOW_TABLE','SHOW_CHART','SHOW_RESULT','REQUEST_INPUT','REQUEST_APPROVAL','REQUEST_CHOICE','SHOW_COMPARISON','SHOW_DIFF','SHOW_PROGRESS']);
 export const UI_INPUT_TYPES=Object.freeze(['CANCEL_RUN','RETRY_RUN','BRANCH_RUN','ADD_CONTEXT','SELECT_SOURCE','SHOW_ARTIFACT','SHOW_EVIDENCE','CHANGE_QUESTION','APPROVE','REJECT','INVOKE_CAPABILITY','RESPOND_TO_INTERRUPT']);
 
 const clip=(value,max=320)=>String(value??'').replace(/\s+/g,' ').trim().slice(0,max);
