@@ -1,5 +1,6 @@
 import { ObservationStore } from './observation/observation-store.js';
 import { ObservationMode } from './observation/observation-mode.js';
+import { HumanView } from './human-view.js';
 import { renderInteractiveResult } from './interactive-result/renderer.js';
 import { renderDataTable } from './data-table.js';
 
@@ -9,11 +10,17 @@ const TERMINAL=new Set(['completed','failed','cancelled','interrupted']);
 const outputLabels={Narrative:'Рассказ',DataArtifact:'Таблица',Presentation:'Слайды',InteractiveResult:'Интерактивный результат'};
 const PRIMARY_OUTPUT_TYPES=new Set(['Narrative','DataArtifact','Presentation']);
 const statusText={created:'Подготавливаем исследование.',launching:'Создаём исследование.',running:'Исследование идёт. Откройте его, чтобы видеть текущую операцию.',completed:'Готово. Выберите: прочитать вывод, исследовать данные или открыть слайды.',cancelled:'Исследование отменено. Незавершённые действия больше не меняют результат.',interrupted:'Исследование было прервано перезапуском AgentSuite.',failed:'Исследование не завершилось.'};
-let mode='random',view='start',currentRunId=localStorage.getItem('agentsuite.currentRunId'),run=null,briefReady=false,session='session-'+crypto.randomUUID(),beforeArtifact='result',launching=false,pendingLaunchRequestId=null;
+let mode='custom',view='start',currentRunId=localStorage.getItem('agentsuite.currentRunId'),run=null,briefReady=false,session='session-'+crypto.randomUUID(),beforeArtifact='result',launching=false,pendingLaunchRequestId=null;
 
-const obsMode=new ObservationMode($('#observation'),{openArtifact,respondToInterrupt,invokeCapability});
+let operatorVisible=false;
+const obsMode=new ObservationMode($('#operator-view-root'),{openArtifact,respondToInterrupt,invokeCapability});
+const humanMode=new HumanView($('#human-view-root'),{onDiagnostics:()=>{operatorVisible=true;$('#human-view-root').hidden=true;$('#operator-view-root').hidden=false;},onOpenArtifact:openArtifact,onAction:async actionId=>{const state=store.projection;const surface=state?.session?.surfaceState?.items?.find(s=>s.actions?.some(a=>a.id===actionId));const action=surface?.actions?.find(a=>a.id===actionId);if(action)await obsMode.capabilityController.begin(action);}});
 const store=new ObservationStore((state,meta)=>{
+  humanMode.render(state);
   obsMode.render(state,meta);
+  if(!$('#operator-view-root [data-human-return]')){
+    const back=document.createElement('button');back.type='button';back.dataset.humanReturn='';back.className='human-return';back.textContent='Вернуться к исследованию';back.onclick=()=>{operatorVisible=false;$('#operator-view-root').hidden=true;$('#human-view-root').hidden=false};$('#operator-view-root').prepend(back);
+  }
   if([...TERMINAL,'needs-context'].includes(state.status))renderResult(state.runId).then(()=>{
     if(currentRunId===state.runId&&$('#artifact').hidden)screen('result');
   });
@@ -200,7 +207,7 @@ async function openHistory(){
   list.querySelectorAll('[data-history-run]').forEach(button=>button.onclick=()=>attachRun(button.dataset.historyRun,'result'));
 }
 
-$('#randomMode').onclick=()=>setMode('random');$('#customMode').onclick=()=>setMode('custom');
+$('#randomMode').onclick=()=>setMode('random');$('#customMode').onclick=()=>setMode('custom');setMode('custom');
 $('#generate').onclick=()=>launch().catch(error=>{pendingLaunchRequestId=null;if(mode==='custom')add('Ошибка: '+error.message,'agent');else alert(error.message)});
 $('#prompt').onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();launch()}};
 $('#runTabs').onclick=event=>{if(event.target.dataset.view){if(event.target.dataset.view==='history')openHistory();else screen(event.target.dataset.view)}};
@@ -218,7 +225,7 @@ window.addEventListener('keydown',event=>{const mod=event.ctrlKey||event.metaKey
 const observationTestMode=new URLSearchParams(location.search).has('observation-test');
 if(observationTestMode){
   window.__AGENTSUITE_OBSERVATION_TEST__=Object.freeze({
-    render(state,meta={}){obsMode.inspector=null;obsMode.render(state,meta);screen('observation');return true;}
+    render(state,meta={}){humanMode.render(state);obsMode.inspector=null;obsMode.render(state,meta);screen('observation');return true;}
   });
 }
 if(currentRunId&&!observationTestMode)attachRun(currentRunId,'result').catch(()=>newGeneration());

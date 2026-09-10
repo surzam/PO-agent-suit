@@ -1,0 +1,23 @@
+const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const label={source:'Источник',evidence:'Факт',validation:'Проверка',comparison:'Сравнение',story:'Рассказ',table:'Таблица',presentation:'Слайды',activity:'Работа',workspace:'Материалы',input:'Продолжение исследования'};
+const humanActivity=state=>state?.session?.activity?.current?.label||state?.activity?.current?.label||({running:'Идёт исследование',launching:'Подготавливаюсь',created:'Подготавливаюсь',completed:'Исследование завершено',failed:'Исследование не завершилось'}[state?.status]||'');
+const surfacesOf=state=>state?.session?.surfaceState?.items||state?.surfaceState?.items||[];
+const find=(surfaces,id)=>surfaces.find(s=>s.id===id);
+
+export class HumanView {
+  constructor(root,{onDiagnostics,onOpenArtifact,onAction}={}){this.root=root;this.onDiagnostics=onDiagnostics;this.onOpenArtifact=onOpenArtifact;this.onAction=onAction;this.activeTab='story';}
+  render(state={}){
+    const session=state.session||{}, surfaces=surfacesOf(state), composition=session.surfaceComposition||state.surfaceComposition||{};
+    const intent=state.intent?.text||state.intent||''; const primary=find(surfaces,composition.primary);
+    const supporting=(composition.supporting||[]).map(id=>find(surfaces,id)).filter(Boolean).slice(0,4);
+    const outputs=(session.outputs?.artifacts||state.outputs?.artifacts||[]).filter(a=>['Narrative','DataArtifact','Presentation'].includes(a.type));
+    const activity=humanActivity(state);
+    this.root.innerHTML=`<div class="human-view" data-human-view="true"><header class="human-header"><div><span class="human-kicker">АГЕНТ SUITE</span><h1>Исследование</h1></div><button class="human-diagnostics" data-human-diagnostics>Диагностика</button></header>${!session.runId&&!state.runId?this.empty():`<section class="human-question"><span>Вопрос</span><p>${esc(intent||'Текущее исследование')}</p></section><section class="human-activity" aria-live="polite"><span>Что происходит</span><strong>${esc(activity||'Работаю…')}</strong></section><main class="human-main"><section class="human-primary" data-region="primary">${primary?this.surface(primary):'<p class="human-empty">Ожидаю первые результаты исследования.</p>'}</section>${supporting.length?`<aside class="human-supporting" data-region="supporting"><h2>Материалы</h2>${supporting.map(s=>this.surface(s,true)).join('')}</aside>`:''}</main>${outputs.length?this.results(outputs):''}</div>`}</div>`;
+    this.root.querySelector('[data-human-diagnostics]')?.addEventListener('click',()=>this.onDiagnostics?.());
+    this.root.querySelectorAll('[data-open-artifact]').forEach(b=>b.addEventListener('click',()=>this.onOpenArtifact?.(b.dataset.openArtifact)));
+    this.root.querySelectorAll('[data-surface-action]').forEach(b=>b.addEventListener('click',()=>this.onAction?.(b.dataset.surfaceAction)));
+  }
+  empty(){return `<section class="human-empty-state"><p>БЕСКОНЕЧНЫЙ РАКУРС</p><h2>Следующая история ещё не существует</h2><span>Задайте вопрос ниже, чтобы начать исследование.</span></section>`;}
+  surface(s,supporting=false){const kind=s.kind||'surface',title=label[kind]||'Материал',content=s.content||{};let body='';if(kind==='source')body=`<h2>${esc(content.title||content.name||'Источник')}</h2><p>${esc(content.summary||content.snippet||content.origin||'Источник исследования')}</p>`;else if(kind==='evidence')body=`<h2>${esc(content.claim||content.title||'Факт')}</h2><p>${esc(content.validationSummary||content.sourceTitle||'Связан с источником исследования.')}</p>`;else if(kind==='comparison')body=`<h2>Сравнение</h2><div class="human-comparison">${(content.items||content.sides||[]).map(i=>`<article><strong>${esc(i.title||i.label||'Позиция')}</strong><p>${esc(i.claim||i.content||i.text||'')}</p></article>`).join('')}</div>`;else body=`<h2>${esc(content.title||title)}</h2><p>${esc(content.summary||content.text||content.description||'')}</p>`;const actions=(s.actions||[]).map(a=>`<button data-surface-action="${esc(a.id)}">${esc(a.label||'Продолжить')}</button>`).join('');return `<article class="human-surface ${supporting?'supporting':''}" data-surface-id="${esc(s.id)}"><span class="human-kicker">${title}</span>${body}${actions?`<div class="human-actions">${actions}</div>`:''}</article>`;}
+  results(outputs){const names={Narrative:'Рассказ',DataArtifact:'Таблица',Presentation:'Слайды'};return `<section class="human-results"><h2>Результаты</h2><div class="human-result-tabs">${outputs.map(a=>`<button class="${a.type==='Narrative'?'active':''}" data-open-artifact="${esc(a.id)}">${names[a.type]}</button>`).join('')}</div></section>`;}
+}
