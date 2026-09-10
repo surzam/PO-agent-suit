@@ -613,7 +613,7 @@ async function handle(req,res){
   await initializeLegacyWorkspace({ acquireLease:false });
   const url=new URL(req.url,'http://localhost');
   if(['POST','PUT','PATCH','DELETE'].includes(req.method)&&!trustedLegacyMutation(req))return sendJson(res,{error:'TRUST_BOUNDARY_REJECTED'},403);
-  if(url.pathname==='/api/health')return sendJson(res,{ok:true,generationVersion,pid:process.pid,port:server.address()?.port || port,buildTimestamp,model:process.env.LLAMA_BASE_URL||appConfig.llm?.base_url||'http://127.0.0.1:8080/v1',sources:researchSources.map(source=>source.id)});
+  if(url.pathname==='/api/health')return sendJson(res,{ok:true,generationVersion,pid:process.pid,port:server.address()?.port || port,buildTimestamp,model:process.env.LLAMA_BASE_URL||appConfig.llm?.base_url||'http://127.0.0.1:8080/v1',modelName:process.env.LLAMA_MODEL||appConfig.llm?.model||'local model',sources:researchSources.map(source=>source.id)});
   if(url.pathname==='/api/brief/turn'&&req.method==='POST')return sendJson(res,{ok:true,...await researchService.briefTurn(await body(req))});
   if(url.pathname==='/api/generations'&&req.method==='POST')return sendJson(res,{ok:true,...researchService.start(await body(req))},202);
   const generation=url.pathname.match(/^\/api\/generations\/([^/]+)$/);

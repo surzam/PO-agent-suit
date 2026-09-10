@@ -13,8 +13,13 @@ export function composeSurfaces({session={},surfaces=[],graph=null,role=null,ren
   const activeInterrupt=items.filter(item=>actionKinds.has(item.kind)&&item.lifecycle==='active').sort((a,b)=>a.id.localeCompare(b.id))[0];
   const comparison=items.find(item=>item.kind==='comparison');
   const active=items.filter(item=>item.lifecycle==='active'&&!actionKinds.has(item.kind)).sort((a,b)=>rank(b)-rank(a)||a.id.localeCompare(b.id))[0];
+  // Once real research material exists it is the subject of work; activity
+  // remains supporting context instead of an empty-looking primary card.
+  const researchPrimary=items.filter(item=>['validation','evidence','source'].includes(item.kind))
+    .sort((a,b)=>(Number(b.lifecycle==='active')-Number(a.lifecycle==='active'))||({evidence:3,source:2,validation:1}[b.kind]-({evidence:3,source:2,validation:1}[a.kind])||rank(b)-rank(a)||a.id.localeCompare(b.id)))[0];
   const resultItems=items.filter(item=>resultKinds.has(item.kind));
-  let primary=activeInterrupt||comparison||active||resultItems[0]||items.find(item=>item.kind==='activity')||items.find(item=>item.kind==='workspace')||null;
+  const canPromoteResearch=!resultItems.length&&['running','launching','created','waiting-for-human'].includes(session.session?.status);
+  let primary=activeInterrupt||comparison||(canPromoteResearch&&researchPrimary)||active||resultItems[0]||items.find(item=>item.kind==='activity')||items.find(item=>item.kind==='workspace')||null;
   if(userFocus){const selected=items.find(item=>item.id===userFocus);if(selected&&!activeInterrupt)primary=selected;}
   const primaryId=primary?.id||null;
   const supporting=items.filter(item=>item.id!==primaryId&&((comparison&&['evidence','source','validation'].includes(item.kind))||item.kind==='activity'||item.kind==='evidence'||item.kind==='source')).sort((a,b)=>rank(b)-rank(a)||a.id.localeCompare(b.id));
