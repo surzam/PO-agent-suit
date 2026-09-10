@@ -1,13 +1,13 @@
 import {
-  ActivitySnapshotEventSchema,CustomEventSchema,RunErrorEventSchema,RunFinishedEventSchema,RunStartedEventSchema,
-  StateSnapshotEventSchema,StepFinishedEventSchema,StepStartedEventSchema,ToolCallArgsEventSchema,
+  ActivityDeltaEventSchema,ActivitySnapshotEventSchema,CustomEventSchema,MessagesSnapshotEventSchema,RunErrorEventSchema,RunFinishedEventSchema,RunStartedEventSchema,
+  StateDeltaEventSchema,StateSnapshotEventSchema,StepFinishedEventSchema,StepStartedEventSchema,TextMessageContentEventSchema,TextMessageEndEventSchema,TextMessageStartEventSchema,ToolCallArgsEventSchema,
   ToolCallEndEventSchema,ToolCallResultEventSchema,ToolCallStartEventSchema
 } from '@ag-ui/core';
 
 const SCHEMAS={
-  ACTIVITY_SNAPSHOT:ActivitySnapshotEventSchema,CUSTOM:CustomEventSchema,RUN_ERROR:RunErrorEventSchema,
+  ACTIVITY_DELTA:ActivityDeltaEventSchema,ACTIVITY_SNAPSHOT:ActivitySnapshotEventSchema,CUSTOM:CustomEventSchema,MESSAGES_SNAPSHOT:MessagesSnapshotEventSchema,RUN_ERROR:RunErrorEventSchema,
   RUN_FINISHED:RunFinishedEventSchema,RUN_STARTED:RunStartedEventSchema,STATE_SNAPSHOT:StateSnapshotEventSchema,
-  STEP_FINISHED:StepFinishedEventSchema,STEP_STARTED:StepStartedEventSchema,TOOL_CALL_ARGS:ToolCallArgsEventSchema,
+  STATE_DELTA:StateDeltaEventSchema,STEP_FINISHED:StepFinishedEventSchema,STEP_STARTED:StepStartedEventSchema,TEXT_MESSAGE_START:TextMessageStartEventSchema,TEXT_MESSAGE_CONTENT:TextMessageContentEventSchema,TEXT_MESSAGE_END:TextMessageEndEventSchema,TOOL_CALL_ARGS:ToolCallArgsEventSchema,
   TOOL_CALL_END:ToolCallEndEventSchema,TOOL_CALL_RESULT:ToolCallResultEventSchema,TOOL_CALL_START:ToolCallStartEventSchema
 };
 const text=(value,max=240)=>String(value??'').replace(/[\r\n]+/g,' ').trim().slice(0,max);

@@ -19,6 +19,53 @@ const sourceMeta=(value={})=>{const sourceId=String(value.sourceId||'').slice(0,
 const eventChannel=event=>{const type=String(event.type),capability=String(event.payload?.capability||'').toUpperCase();if(type.startsWith('Inference')||capability==='MODEL')return'MODEL';if(type.startsWith('Source')||['FILES','LOCAL','WEB','MCP'].includes(capability))return'SOURCES';if(type.startsWith('Artifact')||capability==='PRESENTATION')return'ARTIFACTS';return'ALL'};
 const relationFor=(fromType,toType)=>RELATIONS[`${fromType}>${toType}`]||'upstream';
 
+// A Run filesystem is deliberately a projection, not a second persistence
+// model.  Its paths name canonical runtime facts while hiding host paths.
+const filesystemName=value=>String(value||'item').split(/[\\/]/).at(-1).replace(/[\r\n]/g,' ').slice(0,160)||'item';
+const filesystemArtifact=(type,id)=>{
+  const names={Intent:'intent.json',Brief:'brief.json',EvidenceSet:'evidence.json',ValidationReport:'validation.json',SynthesisPlan:'synthesis.json',DataArtifact:'data.json',InteractiveResult:'interactive-result.json',PresentationStoryPlan:'presentation-story.json',Narrative:'story.md',Presentation:'presentation.html'};
+  return names[type]||`${String(type||'artifact').replace(/[^A-Za-z0-9._-]/g,'-').toLowerCase()}-${String(id||'artifact').slice(-8)}.json`;
+};
+
+export function projectFilesystem(run,{artifacts=[]}={}){
+  const runId=String(run?.id||'run'), events=ordered(run?.events), nodes=[];
+  const add=(node)=>{nodes.push(node);return node};
+  const root=add({id:'workspace',parentId:null,name:'workspace',kind:'workspace',path:'workspace',status:run?.status==='running'?'active':'ready'});
+  const runs=add({id:'runs',parentId:root.id,name:'runs',kind:'directory',path:'workspace/runs',status:'ready'});
+  // The internal Run identity remains in node.id for correlation only. The
+  // user-facing logical workspace must not disclose raw Runtime identifiers.
+  const runNode=add({id:`run:${runId}`,parentId:runs.id,name:'current',kind:'directory',path:'workspace/runs/current',status:run?.status==='running'?'active':'ready'});
+  const context=add({id:'context',parentId:runNode.id,name:'context',kind:'directory',path:`${runNode.path}/context`,status:'ready'});
+  const research=add({id:'research',parentId:runNode.id,name:'research',kind:'directory',path:`${runNode.path}/research`,status:'ready'});
+  const artifactsDir=add({id:'artifacts',parentId:runNode.id,name:'artifacts',kind:'directory',path:`${runNode.path}/artifacts`,status:'ready'});
+  const outputs=add({id:'outputs',parentId:runNode.id,name:'outputs',kind:'directory',path:`${runNode.path}/outputs`,status:'ready'});
+  const sourceById=new Map(), artifactEvents=new Map();
+  for(const event of events){
+    const payload=event.payload||{};
+    if(event.type==='SourceOpened'||event.type==='SourceRead'||event.type==='EvidenceCollected'){
+      const refs=event.type==='EvidenceCollected'?(payload.sources||[]):[payload];
+      for(const ref of refs){const meta=sourceMeta(ref);if(!meta.sourceId)continue;const old=sourceById.get(meta.sourceId)||{...meta,evidenceIds:[],opened:false,read:false,sequence:event.sequence};sourceById.set(meta.sourceId,{...old,...meta,evidenceIds:[...new Set([...(old.evidenceIds||[]),...(ref.evidenceIds||[])])],opened:old.opened||event.type==='SourceOpened',read:old.read||event.type==='SourceRead',sequence:event.sequence,operationId:ref.operationId||old.operationId||null});}
+    }
+    if(['ArtifactCreated','ArtifactReused'].includes(event.type)&&payload.artifactId)artifactEvents.set(payload.artifactId,{type:event.type,sequence:event.sequence,operationId:payload.producedByOperationId||null});
+  }
+  for(const source of sourceById.values()){
+    const base=source.contextRootId==='project'||source.sourceKind==='local'?'context':'research';
+    const parentId=base==='context'?context.id:research.id;
+    const status=source.opened&&!source.read?'active':source.evidenceIds.length?'evidence':source.read?'read':'ready';
+    add({id:`source:${source.sourceId}`,parentId,name:filesystemName(source.safeDisplayName),kind:'source',path:`${base==='context'?context.path:research.path}/${filesystemName(source.safeDisplayName)}`,status,sourceId:source.sourceId,operationId:source.operationId||null,evidenceCount:source.evidenceIds.length,updatedAt:null});
+  }
+  for(const artifact of artifacts){
+    const fact=artifactEvents.get(artifact.id), reused=artifact.reused||fact?.type==='ArtifactReused';
+    const output=['DataArtifact','Narrative','Presentation','InteractiveResult'].includes(artifact.type);
+    const parent=output?outputs:artifactsDir;
+    add({id:`artifact:${artifact.id}`,parentId:parent.id,name:filesystemArtifact(artifact.type,artifact.id),kind:output?'output':'artifact',path:`${parent.path}/${filesystemArtifact(artifact.type,artifact.id)}`,status:reused?'reused':'ready',artifactId:artifact.id,operationId:artifact.producedByOperationId||fact?.operationId||null,reused:Boolean(reused),createdAt:artifact.createdAt||null});
+  }
+  const activeOperationIds=new Set(run?.activeOperationIds||[]);
+  for(const node of nodes)if(node.operationId&&activeOperationIds.has(node.operationId))node.status='active';
+  const active=nodes.find(node=>node.status==='active'&&['source','artifact','output'].includes(node.kind))||null;
+  return {rootId:root.id,currentPath:active?.path?.split('/').slice(0,-1).join('/')||runNode.path,nodes,activeNodeId:active?.id||null,lastSequence:events.at(-1)?.sequence||0};
+}
+
 function actionOutcome(events,artifacts){
   const failed=[...events].reverse().find(event=>/Failed$/.test(event.type));if(failed)return failed.payload?.message||failed.payload?.code||'Operation failed';
   if(artifacts.length)return`${artifacts.map(item=>item.type).join(', ')} created`;
@@ -98,5 +145,5 @@ export function projectObservation(run,{capabilities=[],configuration={},artifac
   const startedAt=events.find(event=>event.type==='RunRequested')?.at||run?.createdAt||null;
   const finishedAt=[...events].reverse().find(event=>['RunCompleted','RunFailed'].includes(event.type))?.at||null;
   const elapsedMs=startedAt?Math.max(0,Date.parse(finishedAt||new Date().toISOString())-Date.parse(startedAt)):0;
-  return{runId:run?.id||null,status:run?.status||null,intent,brief:byType.get('Brief')?.data||null,activeStage,currentHarness,role,stages,flowEdges,fullStageEdges,dependencyContractVersion:RELATION_CONTRACT_VERSION,dependencies,agentActions:actions,terminalRecords,safeInputEvents:actions.map(action=>({sequence:action.firstSequence,operationId:action.correlationId,displayInput:action.displayInput,capability:action.capability,stageId:action.stageId})),capabilities:[...caps].map(([id,state])=>({id,state,active:state==='active'})),contextWorld:{roots:[...roots.values()],sources:[...sources.values()],activeSourceId:[...sources.values()].find(item=>item.tracking==='LIVE')?.sourceId||null},evidence:{count:evidence.length,validated:[...validationByEvidence.values()].filter(item=>item.valid).length,unknown:[...validationByEvidence.values()].filter(item=>!item.valid).length,items:evidence},validationDecisions:validation.items||[],claims,outputs,artifacts:artifactRefs,artifactRefs,reusedArtifacts:artifactRefs.filter(item=>item.reused),consoleLines,startedAt,finishedAt,elapsedMs,lastSequence:events.at(-1)?.sequence||0};
+  return{runId:run?.id||null,status:run?.status||null,intent,brief:byType.get('Brief')?.data||null,activeStage,currentHarness,role,stages,flowEdges,fullStageEdges,dependencyContractVersion:RELATION_CONTRACT_VERSION,dependencies,agentActions:actions,terminalRecords,safeInputEvents:actions.map(action=>({sequence:action.firstSequence,operationId:action.correlationId,displayInput:action.displayInput,capability:action.capability,stageId:action.stageId})),capabilities:[...caps].map(([id,state])=>({id,state,active:state==='active'})),contextWorld:{roots:[...roots.values()],sources:[...sources.values()],activeSourceId:[...sources.values()].find(item=>item.tracking==='LIVE')?.sourceId||null},evidence:{count:evidence.length,validated:[...validationByEvidence.values()].filter(item=>item.valid).length,unknown:[...validationByEvidence.values()].filter(item=>!item.valid).length,items:evidence},validationDecisions:validation.items||[],claims,outputs,artifacts:artifactRefs,artifactRefs,reusedArtifacts:artifactRefs.filter(item=>item.reused),filesystem:projectFilesystem(run,{artifacts}),consoleLines,startedAt,finishedAt,elapsedMs,lastSequence:events.at(-1)?.sequence||0};
 }

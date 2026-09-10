@@ -2,6 +2,8 @@ export const AG_UI_SCHEMA_VERSION=1;
 export const TOOL_CAPABILITIES=new Set(['FILES','LOCAL','WEB','MCP','SHELL','BROWSER']);
 export const CUSTOM_NAMES=Object.freeze({
   RunCancelled:'agentsuite.run.cancelled',RunCancellationSettled:'agentsuite.run.cancellation-settled',RunInterrupted:'agentsuite.run.interrupted',HarnessFailed:'agentsuite.step.failed',
+  HumanInterruptCreated:'agentsuite.human.interrupt-created',RunWaitingForHuman:'agentsuite.run.waiting-for-human',HumanResponseReceived:'agentsuite.human.response-received',HumanResponseRejected:'agentsuite.human.response-rejected',HumanInterruptResolved:'agentsuite.human.interrupt-resolved',HumanInterruptCancelled:'agentsuite.human.interrupt-cancelled',RunResumed:'agentsuite.run.resumed',
+  HumanCapabilityInvoked:'agentsuite.human.capability-invoked',
   InferenceRequested:'agentsuite.inference.requested',InferenceStarted:'agentsuite.inference.started',InferenceCompleted:'agentsuite.inference.completed',InferenceFailed:'agentsuite.inference.failed',
   SourceOpened:'agentsuite.source.opened',SourceRead:'agentsuite.source.read',EvidenceCollected:'agentsuite.evidence.collected',ArtifactCreated:'agentsuite.artifact.created',ArtifactReused:'agentsuite.artifact.reused',RoleContextLoaded:'agentsuite.role.loaded',ResearchProgressed:'agentsuite.research.progressed',ResearchCompleted:'agentsuite.research.completed',ValidationCompleted:'agentsuite.validation.completed',SynthesisCompleted:'agentsuite.synthesis.completed',DataCompleted:'agentsuite.data.completed',NarrativeCompleted:'agentsuite.narrative.completed',PresentationCompleted:'agentsuite.presentation.completed'
 });

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createArtifact, createEvent, createRun, validateRunId } from './contracts.mjs';
+import { createHumanInterrupt, projectHumanInterrupts, validateHumanResponse } from './human-interrupt.mjs';
 
 const TERMINAL_STATES=new Set(['completed','failed','cancelled','interrupted']);
 const OPERATION_START=new Set(['CapabilityRequested','CapabilityStarted','InferenceRequested','InferenceStarted','ArtifactRequested','SourceOpened']);
@@ -73,6 +74,8 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     if(event.type==='RunRequested'){run.intent=String(payload.intent??run.intent??'');run.role=payload.role||run.role;run.workflow=payload.workflow||run.workflow}
     if(event.type==='RunLaunching')run.status='launching';
     if(event.type==='RunStarted')run.status='running';
+    if(event.type==='RunWaitingForHuman'){run.status='waiting-for-human';run.reasonCode='human-interrupt';}
+    if(event.type==='RunResumed'){run.status='running';run.reasonCode=null;}
     if(event.type==='RunNeedsContext'){run.status='needs-context';run.reasonCode=payload.reasonCode||'insufficient-context'}
     if(event.type==='RunCompleted'){run.status='completed';run.reasonCode=null}
     if(event.type==='RunFailed'){run.status='failed';run.reasonCode=payload.reasonCode||run.reasonCode||'harness-failed'}
@@ -114,7 +117,7 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
 
   async function transitionRunUnlocked(run,{to,eventType,reasonCode=null,payload={}}={}){
       if(terminalStates.has(run.status))return false;
-      if(!['created','launching','running'].includes(run.status))return false;
+      if(!['created','launching','running','waiting-for-human'].includes(run.status))return false;
       run.status=to;run.reasonCode=reasonCode;
       await appendEventUnlocked(run,eventType,{...payload,...(reasonCode?{reasonCode}: {})});
       return true;
@@ -253,26 +256,23 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     }
   }
 
-  async function execute(run, stages, context, definition={},initialEvents=[]) {
+  async function execute(run, stages, context, definition={},initialEvents=[],{resume=null}={}) {
     let activeStage = null;
     const controller=new AbortController();controllers.set(run.id,{controller,run,cancellationRecorded:false});
     try {
       if(terminalStates.has(run.status))return run;
-      run.status = 'running';
-      run.reasonCode=null;
-      await appendEvent(run,'RunStarted',{runtimeInstanceId});
-      const roleDefinition=roles?.get?.(run.role)||null;
-      if(roleDefinition)await appendEvent(run,'RoleContextLoaded',{roleId:roleDefinition.id,label:roleDefinition.label||roleDefinition.id});
-      for(const event of initialEvents)await appendEvent(run,event.type,event.payload);
+      run.status = 'running';run.reasonCode=null;
+      if(!resume){await appendEvent(run,'RunStarted',{runtimeInstanceId});const roleDefinition=roles?.get?.(run.role)||null;if(roleDefinition)await appendEvent(run,'RoleContextLoaded',{roleId:roleDefinition.id,label:roleDefinition.label||roleDefinition.id});for(const event of initialEvents)await appendEvent(run,event.type,event.payload);}
       for (const stage of stages) {
         if(controller.signal.aborted)throw Object.assign(new Error('Run cancelled by user'),{code:'ABORTED'});
         activeStage = stage;
         let outcome;
-        try { outcome = await dispatch(run, stage, context,controller.signal); }
+        try { outcome = await dispatch(run, stage, context,controller.signal,resume); }
         catch(error) {
           if(stage.optional){ await appendEvent(run,'OptionalMaterializationFailed',{stage:stage.id,harnessId:stage.harnessId,code:error.code||'MATERIALIZATION_FAILED',message:String(error.message||error).slice(0,240)}); continue; }
           throw error;
         }
+        if(outcome.halt?.interrupt){await requestHumanInterrupt(run,{...outcome.halt.interrupt,continuation:{workflowId:run.workflow,stageId:outcome.halt.interrupt.continuation?.stageId||stages[stages.indexOf(stage)+1]?.id,operationId:outcome.halt.interrupt.continuation?.operationId,artifactRefs:run.artifacts.map(item=>item.id)}});return run;}
         if (outcome.halt) {
           run.status = outcome.halt.status || 'needs-context';
           run.reasonCode=outcome.halt.cause||'insufficient-context';
@@ -281,6 +281,7 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
         }
       }
       await verifyRequiredOutputs(run,definition);
+      if(resume)await appendEvent(run,'HumanContinuationCompleted',{interruptId:resume.interruptId,resumeKey:resume.resumeKey});
       await commitRunTransition(run,{to:'completed',eventType:'RunCompleted',payload:{artifacts: run.artifacts.map(item => item.id)}});
     } catch (error) {
       const reasonCode=failureReason(error),cancelled=reasonCode==='user-cancelled';
@@ -302,7 +303,7 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
 
   async function launchFork(options = {}) {
     const prepared = await prepareFork(options);
-    const completion = execute(prepared.run, prepared.stages, prepared.context,options.workflowDefinition||{},prepared.reuseEvents.map(payload=>({type:'ArtifactReused',payload})));
+    const completion = execute(prepared.run, prepared.stages, prepared.context,options.workflowDefinition||{},[...prepared.reuseEvents.map(payload=>({type:'ArtifactReused',payload})),...(options.initialEvents||[])]);
     return { run:prepared.run, completion };
   }
 
@@ -311,12 +312,14 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     return launched.completion;
   }
 
-  async function persistArtifact(run, artifact) {
+  async function persistArtifact(run, artifact,identity=null) {
     const sourceArtifactIds = [...new Set(artifact.sourceArtifactIds || artifact.inputs || [])].map(String);
     const knownArtifactIds = new Set(run.artifacts.map(item => item.id));
     const unknownInputs = sourceArtifactIds.filter(id => !knownArtifactIds.has(id));
     if (unknownInputs.length) throw new Error(`Artifact ${artifact.type} references unknown artifacts: ${unknownInputs.join(', ')}`);
-    const value = createArtifact({ runId: run.id, type: artifact.type, data: artifact.data, sourceArtifactIds });
+    const stableId=identity?`artifact-resume-${crypto.createHash('sha256').update(identity).digest('hex').slice(0,32)}`:null;
+    const prior=stableId&&run.artifacts.find(item=>item.id===stableId);if(prior)return loadArtifact(run,prior);
+    const value = createArtifact({ id:stableId,runId: run.id, type: artifact.type, data: artifact.data, sourceArtifactIds });
     const relativeFile = `artifacts/${value.id}.json`;
     value.file = relativeFile;
     const producedByOperationId = artifact.producedByOperationId || null;
@@ -335,7 +338,7 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     return value;
   }
 
-  async function dispatch(run, stage, context, signal=null) {
+  async function dispatch(run, stage, context, signal=null,resume=null) {
     const harness = registry.get(stage.harnessId);
     if (!harness) throw new Error(`Unknown harness: ${stage.harnessId}`);
     const trigger = stage.requestEvent ? await appendEvent(run, stage.requestEvent, { harnessId: harness.id, stage: stage.id || harness.id }) : run.events.at(-1);
@@ -356,10 +359,11 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
       workflow: run.workflow,
       signal,
       config: stage.config || {}
+      ,humanResponse:resume?.response||null
     }));
     const persisted = [];
-    for (const artifact of result.artifacts) {
-      const saved = await persistArtifact(run, artifact);
+    for (let artifactIndex=0;artifactIndex<result.artifacts.length;artifactIndex++) {
+      const artifact=result.artifacts[artifactIndex],saved = await persistArtifact(run, artifact,resume?`${resume.resumeKey}:${stage.id||stage.harnessId}:${artifactIndex}:${artifact.type}`:null);
       persisted.push(saved);
       if (saved.type === 'Intent' && saved.data?.question) { run.intent = String(saved.data.question).trim(); await saveRun(run); }
     }
@@ -386,11 +390,12 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     return reconcileSnapshot(JSON.parse(await fs.readFile(path.join(runsDir, id, 'run.json'), 'utf8')));
   }
 
-  async function cancel(id){
+  async function cancel(id,{invocationId=null,invocationFingerprint=null}={}){
     const run=await inspect(id);const active=controllers.get(id),target=active?.run||run;
     await withRunLock(id,async()=>{
       if(terminalStates.has(target.status))return;
-      await transitionRunUnlocked(target,{to:'cancelled',eventType:'RunCancelled',reasonCode:'user-cancelled',payload:{reasonCode:'user-cancelled',message:'Run cancelled by user',physicalOperationSettled:!active}});
+      const pending=projectHumanInterrupts(target.events).find(item=>item.state==='pending');if(pending)await appendEventUnlocked(target,'HumanInterruptCancelled',{interruptId:pending.id,reasonCode:'run-cancelled'});
+      await transitionRunUnlocked(target,{to:'cancelled',eventType:'RunCancelled',reasonCode:'user-cancelled',payload:{reasonCode:'user-cancelled',message:'Run cancelled by user',physicalOperationSettled:!active,...(invocationId?{invocationId,invocationFingerprint}:{})}});
       if(active){active.cancellationRecorded=true;active.controller.abort()}
     });
     return inspect(id);
@@ -413,5 +418,35 @@ export function createRuntime({ rootDir, registry, roles = null, contextProvider
     return recovered;
   }
 
-  return { start, launch, run, launchFork, fork, dispatch, inspect, cancel, recoverOrphanedRuns, verifyRequiredOutputs, runtimeInstanceId, runsDir };
+  async function requestHumanInterrupt(run,input){return withRunLock(run.id,async()=>{if(run.status!=='running')throw Object.assign(new Error('Run is not running'),{code:'HUMAN_INTERRUPT_STATE_INVALID'});if(projectHumanInterrupts(run.events).some(item=>item.state==='pending'))throw Object.assign(new Error('Run already has a pending interrupt'),{code:'HUMAN_INTERRUPT_PENDING'});const interrupt=createHumanInterrupt({...input,runId:run.id});await appendEventUnlocked(run,'HumanInterruptCreated',{interrupt});run.status='waiting-for-human';run.reasonCode='human-interrupt';await appendEventUnlocked(run,'RunWaitingForHuman',{interruptId:interrupt.id,kind:interrupt.kind});return interrupt;});}
+
+  async function respondToInterrupt(interruptId,response,{stages=[],workflowDefinition={},invocationId=null,invocationFingerprint=null}={}){
+    let accepted=null;
+    const runEntries=await fs.readdir(runsDir,{withFileTypes:true}).catch(()=>[]);
+    for(const entry of runEntries.filter(item=>item.isDirectory())){
+      const candidate=await inspect(entry.name).catch(()=>null),known=candidate&&projectHumanInterrupts(candidate.events).find(item=>item.id===interruptId);if(!known)continue;
+      const knownStage=stages.findIndex(stage=>stage.id===known.continuation.stageId||stage.harnessId===known.continuation.stageId);if(knownStage<0)return{accepted:false,runId:candidate.id,reasonCode:'HUMAN_CONTINUATION_UNAVAILABLE'};
+      accepted=await withRunLock(candidate.id,async()=>{
+        const run=await inspect(candidate.id),interrupt=projectHumanInterrupts(run.events).find(item=>item.id===interruptId);if(!interrupt)return{accepted:false,reasonCode:'HUMAN_INTERRUPT_NOT_FOUND'};
+        if(interrupt.state!=='pending'){const duplicate=invocationId&&run.events.some(event=>event.type==='HumanResponseReceived'&&event.payload?.interruptId===interruptId&&event.payload?.invocationId===invocationId);return duplicate?{accepted:true,runId:run.id,status:run.status,idempotent:true}:{accepted:false,runId:run.id,reasonCode:'HUMAN_INTERRUPT_ALREADY_RESOLVED'};}
+        if(run.status!=='waiting-for-human'||terminalStates.has(run.status))return{accepted:false,runId:run.id,reasonCode:'RUN_NOT_WAITING_FOR_HUMAN'};
+        let normalized;try{normalized=validateHumanResponse(interrupt,response)}catch(error){await appendEventUnlocked(run,'HumanResponseRejected',{interruptId,reasonCode:error.code||'HUMAN_RESPONSE_INVALID'});return{accepted:false,runId:run.id,reasonCode:error.code||'HUMAN_RESPONSE_INVALID'};}
+        await appendEventUnlocked(run,'HumanResponseReceived',{interruptId,response:normalized,...(invocationId?{invocationId,invocationFingerprint}:{})});await appendEventUnlocked(run,'HumanInterruptResolved',{interruptId,...(invocationId?{invocationId,invocationFingerprint}:{})});run.status='running';run.reasonCode=null;const resumeKey=`${interruptId}:resume`;await appendEventUnlocked(run,'RunResumed',{interruptId,resumeKey,...(invocationId?{invocationId,invocationFingerprint}:{})});await appendEventUnlocked(run,'HumanContinuationStarted',{interruptId,resumeKey});return{accepted:true,run,interrupt:{...interrupt,state:'resolved',response:normalized},resumeKey};
+      });break;
+    }
+    if(!accepted)return{accepted:false,reasonCode:'HUMAN_INTERRUPT_NOT_FOUND'};if(!accepted.accepted||accepted.idempotent)return accepted;
+    const stageIndex=stages.findIndex(stage=>stage.id===accepted.interrupt.continuation.stageId||stage.harnessId===accepted.interrupt.continuation.stageId);if(stageIndex<0)return{accepted:false,runId:accepted.run.id,reasonCode:'HUMAN_CONTINUATION_UNAVAILABLE'};
+    const artifacts=await Promise.all(accepted.run.artifacts.map(item=>loadArtifact(accepted.run,item).catch(()=>null))).then(items=>items.filter(Boolean));
+    const completion=execute(accepted.run,stages.slice(stageIndex),{artifacts},workflowDefinition,[],{resume:{interruptId,response:accepted.interrupt.response,resumeKey:accepted.resumeKey}});
+    return{accepted:true,runId:accepted.run.id,status:'running',completion};
+  }
+
+  async function recoverHumanContinuation(id,{stages=[],workflowDefinition={}}={}){
+    let prepared=await withRunLock(id,async()=>{const run=await inspect(id);if(terminalStates.has(run.status))return null;const interrupts=projectHumanInterrupts(run.events),interrupt=[...interrupts].reverse().find(item=>item.response);if(!interrupt)return null;const completed=run.events.some(event=>event.type==='HumanContinuationCompleted'&&event.payload?.interruptId===interrupt.id);if(completed){run.status='completed';run.reasonCode=null;await appendEventUnlocked(run,'RunCompleted',{artifacts:run.artifacts.map(item=>item.id),recovered:true});return null;}const stageIndex=stages.findIndex(stage=>stage.id===interrupt.continuation.stageId||stage.harnessId===interrupt.continuation.stageId);if(stageIndex<0)return null;if(interrupt.state==='pending')await appendEventUnlocked(run,'HumanInterruptResolved',{interruptId:interrupt.id,recovered:true});const resumeKey=`${interrupt.id}:resume`;if(!run.events.some(event=>event.type==='RunResumed'&&event.payload?.interruptId===interrupt.id)){run.status='running';run.reasonCode=null;await appendEventUnlocked(run,'RunResumed',{interruptId:interrupt.id,resumeKey,recovered:true});}if(!run.events.some(event=>event.type==='HumanContinuationStarted'&&event.payload?.interruptId===interrupt.id))await appendEventUnlocked(run,'HumanContinuationStarted',{interruptId:interrupt.id,resumeKey,recovered:true});return{run,interrupt,resumeKey,stageIndex};});
+    if(!prepared)return null;const artifacts=await Promise.all(prepared.run.artifacts.map(item=>loadArtifact(prepared.run,item).catch(()=>null))).then(items=>items.filter(Boolean));return execute(prepared.run,stages.slice(prepared.stageIndex),{artifacts},workflowDefinition,[],{resume:{interruptId:prepared.interrupt.id,response:prepared.interrupt.response,resumeKey:prepared.resumeKey}});
+  }
+
+  async function recoverHumanInterrupt(id){return withRunLock(id,async()=>{const run=await inspect(id);if(terminalStates.has(run.status))return run;const pending=projectHumanInterrupts(run.events).find(item=>item.state==='pending');if(pending&&!pending.response&&!run.events.some(event=>event.type==='RunWaitingForHuman'&&event.payload?.interruptId===pending.id)){run.status='waiting-for-human';run.reasonCode='human-interrupt';await appendEventUnlocked(run,'RunWaitingForHuman',{interruptId:pending.id,kind:pending.kind,recovered:true});}return run;});}
+
+  return { start, launch, run, launchFork, fork, dispatch, inspect, cancel, requestHumanInterrupt,respondToInterrupt,recoverHumanInterrupt,recoverHumanContinuation,recoverOrphanedRuns, verifyRequiredOutputs, runtimeInstanceId, runsDir };
 }

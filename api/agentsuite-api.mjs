@@ -8,8 +8,12 @@ import { createSuiteExecution } from '../app/execution.mjs';
 import { ensureDemoFixture } from './demo-fixture.mjs';
 import { projectObservation } from '../core/observation.mjs';
 import { createAgUiEndpoint } from '../interop/ag-ui/endpoint.mjs';
+import { createLiveSessionState } from '../interop/ag-ui/session.mjs';
 import { acquireWorkspaceLease } from '../core/workspace-lease.mjs';
 import { readJson } from './request-body.mjs';
+import {createCapabilityRegistry,capabilityAvailability} from '../core/capabilities.mjs';
+import {normalizeCapabilityInput} from '../core/capability-invocation.mjs';
+import {createRuntimeCapabilityDispatcher} from '../core/runtime-capability-dispatch.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const publicDir = path.join(root, 'public');
@@ -38,6 +42,7 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
   const diagnosticsFile=path.join(rootDir,'diagnostics.jsonl');
   const rotateDiagnostics=async()=>{const limit=5*1024*1024;const stat=await fs.stat(diagnosticsFile).catch(()=>null);if(stat?.size>limit){await fs.rm(`${diagnosticsFile}.1`,{force:true});await fs.rename(diagnosticsFile,`${diagnosticsFile}.1`)}};
   const subscribers = new Map();
+  const actionCapabilities=createCapabilityRegistry();
   let bootId=null;
   const eventSink = async event => {
     const record={timestamp:event.at,runtimeInstanceId:bootId,runId:event.runId,eventId:event.eventId,sequence:event.sequence,operationId:event.payload?.operationId||null,stageId:event.payload?.stage||null,eventCode:event.type,reasonCode:event.payload?.reasonCode||null,durationMs:Number.isFinite(event.payload?.durationMs)?event.payload.durationMs:null,provider:event.payload?.provider||null,capability:event.payload?.capability||null};
@@ -52,10 +57,11 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
     const entries = await fs.readdir(path.join(rootDir, 'runs'), { withFileTypes:true }).catch(() => []);
     return Promise.all(entries.filter(entry => entry.isDirectory()).map(entry => runtimeFor('brief').inspect(entry.name).catch(() => null))).then(items => items.filter(Boolean).sort((a,b) => b.createdAt.localeCompare(a.createdAt)));
   }
+  for(const candidate of await allRuns()){const mode=candidate.events.some(event=>event.type==='IntentDiscoveryRequested')?'random':'custom',{runtime,stages,definition}=execution.runtime(candidate.workflow,mode);await runtime.recoverHumanInterrupt(candidate.id).catch(()=>null);const recovered=await runtime.recoverHumanContinuation(candidate.id,{stages,workflowDefinition:definition}).catch(()=>null);if(recovered)await recovered;}
   await runtimeFor('brief','custom').recoverOrphanedRuns();
   const launches=new Map();
   for(const run of await allRuns())if(run.launchRequestId)launches.set(run.launchRequestId,run.id);
-  let activeForeground=(await allRuns()).find(run=>['created','launching','running'].includes(run.status))?.id||null;
+  let activeForeground=(await allRuns()).find(run=>['created','launching','running','waiting-for-human'].includes(run.status))?.id||null;
   let admission=Promise.resolve();
   function serializeLaunch(task){const result=admission.then(task,task);admission=result.catch(()=>{});return result}
   async function artifactById(id) {
@@ -115,14 +121,16 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
     req.on('close', () => { clearInterval(heartbeat); unsubscribe(); });
   }
   const observationForRun=async run=>{const mode=run.events.some(event=>event.type==='IntentDiscoveryRequested')?'random':'custom';return projectObservation(run,{capabilities:execution.capabilities().map(item=>item.id),configuration:execution.contextConfiguration(),artifacts:await artifactsForRun(run),contracts:execution.contracts(run.workflow,mode)})};
+  const capabilityDispatcher=createRuntimeCapabilityDispatcher({registry:actionCapabilities,allRuns,inspect,observationForRun,execution,serializeLaunch,launches,getActiveForeground:()=>activeForeground,setActiveForeground:value=>{activeForeground=value}});
   const agUiEndpoint=createAgUiEndpoint({
     inspect,
     observation:observationForRun,
+    session:async run=>createLiveSessionState(run,{observation:await observationForRun(run),threadId:run.interopMetadata?.agUi?.threadId||`agentsuite-thread:${run.id}`,capabilities:['text','markdown','table','file-tree','source','evidence','validation','timeline','story','presentation','approval','choice','input','progress']}),
     subscribe,
     threadIdForRun:async run=>{let rootRun=run,guard=0;while(rootRun.parentRunId&&guard++<100){const parent=await inspect(rootRun.parentRunId).catch(()=>null);if(!parent)break;rootRun=parent}return`agentsuite-thread:${rootRun.id}`},
     launch:value=>serializeLaunch(async()=>{
       if(launches.has(value.launchRequestId)){const existingId=launches.get(value.launchRequestId);if(existingId!==value.runId)throw Object.assign(new Error('launchRequestId belongs to another Run'),{code:'LAUNCH_REQUEST_CONFLICT',statusCode:409});return inspect(existingId)}
-      if(activeForeground){const active=await inspect(activeForeground).catch(()=>null);if(active&&['created','launching','running'].includes(active.status))throw Object.assign(new Error('Another foreground Run is active'),{code:'ACTIVE_RUN_EXISTS',statusCode:409});activeForeground=null}
+      if(activeForeground){const active=await inspect(activeForeground).catch(()=>null);if(active&&['created','launching','running','waiting-for-human'].includes(active.status))throw Object.assign(new Error('Another foreground Run is active'),{code:'ACTIVE_RUN_EXISTS',statusCode:409});activeForeground=null}
       if(!execution.roleRegistry.get(value.role))throw Object.assign(new Error(`Unknown Role: ${value.role}`),{code:'UNKNOWN_ROLE',statusCode:400});
       let launched;
       if(value.parentRunId){
@@ -138,7 +146,11 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
       launched.completion.catch(error=>console.error(`[AgentSuite AG-UI run] ${launched.run.id}: ${error.message}`)).finally(()=>{if(activeForeground===launched.run.id)activeForeground=null});
       return launched.run;
     }),
-    cancel:async runId=>{const target=await inspect(runId);const mode=target.events.some(event=>event.type==='IntentDiscoveryRequested')?'random':'custom';return execution.runtime(target.workflow,mode).runtime.cancel(target.id)},
+    cancel:async runId=>{const result=await capabilityDispatcher.invoke(normalizeCapabilityInput({type:'CANCEL_RUN',runId,payload:{}}));if(!result.accepted)throw Object.assign(new Error(result.reasonCode),{code:result.reasonCode});return inspect(result.runId)},
+    input:async value=>{
+      let invocation;try{invocation=normalizeCapabilityInput(value)}catch(error){return{accepted:false,runId:value.runId,reasonCode:error.code||'CAPABILITY_INVOCATION_INVALID'};}
+      return capabilityDispatcher.invoke(invocation);
+    },
     artifact:async(runId,artifactId)=>{const run=await inspect(runId).catch(()=>null),metadata=run?.artifacts?.find(item=>item.id===artifactId);if(!metadata||!['DataArtifact','Narrative','Presentation','InteractiveResult'].includes(metadata.type))return null;return artifactForRun(runId,artifactId)}
   });
   function trustedMutation(req){
@@ -157,9 +169,10 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
     if (req.method === 'GET' && url.pathname === '/api/health') return json(res,{ok:true, runtime:'agentsuite', capabilities:execution.capabilities()});
     if(req.method==='GET'&&url.pathname==='/api/diagnostics'){const lines=await fs.readFile(diagnosticsFile,'utf8').then(text=>text.trim().split(/\r?\n/).filter(Boolean).slice(-80).map(JSON.parse)).catch(()=>[]),runs=await allRuns();const lastFailure=[...lines].reverse().find(item=>['RunFailed','RunInterrupted','RunCancelled'].includes(item.eventCode));return json(res,{runtimeInstanceId:execution.runtimeInstanceId,currentRunId:activeForeground,activeRunId:activeForeground,lastRunId:runs[0]?.id||null,lastCompletedRunId:runs.find(run=>run.status==='completed')?.id||null,lastFailedRunId:runs.find(run=>['failed','interrupted','cancelled'].includes(run.status))?.id||null,lastFailureCode:lastFailure?.reasonCode||null,logLocation:'AgentSuite userData/workspace/diagnostics.jsonl',records:lines})}
     if (req.method === 'POST' && url.pathname === '/api/brief/turn') return json(res,{ok:true,...await execution.briefTurn(await readJson(req,{maxBytes:128*1024}))});
-    if (req.method === 'POST' && url.pathname === '/api/context') { const input=await readJson(req,{maxBytes:1024*1024}); if(!input.name||!input.content)return json(res,{error:'Context file requires name and content'},400); if(String(input.content).length>1_000_000)return json(res,{error:'Context file exceeds 1 MB'},413); return json(res,{ok:true,...execution.addContext({name:String(input.name),text:String(input.content)})},201); }
+    if (req.method === 'POST' && url.pathname === '/api/context') { const input=await readJson(req,{maxBytes:1024*1024});if(!input.runId)return json(res,{error:'Legacy context mutation requires runId'},400);const result=await capabilityDispatcher.invoke(normalizeCapabilityInput({type:'ADD_CONTEXT',runId:String(input.runId),payload:{invocationId:input.invocationId,name:input.name,content:input.content}}));return json(res,result,result.accepted?202:409); }
     if (req.method === 'GET' && url.pathname === '/api/runs') return json(res,{runs:await allRuns()});
     if (req.method === 'GET' && url.pathname === '/api/runtime/capabilities') return json(res,{capabilities:execution.capabilities()});
+    if(req.method==='GET'&&url.pathname==='/api/runtime/action-capabilities'){const runId=url.searchParams.get('runId'),run=runId?await inspect(runId).catch(()=>null):null,view=run?await observationForRun(run):null,pending=Boolean(run&&createLiveSessionState(run,{observation:view}).ui.pendingInteraction),hasResearchContext=Boolean(view?.evidence?.items?.length||view?.contextWorld?.sources?.length);return json(res,{capabilities:capabilityDispatcher.publicCapabilities().map(item=>({...item,availability:run?capabilityAvailability(item.id,{runStatus:run.status,pendingInterrupt:pending,hasResearchContext,roleId:run.role}).available:false}))});}
     if(req.method==='GET'&&url.pathname==='/api/runtime/sources')return json(res,{sources:await execution.sourceStatuses()});
     if (req.method === 'GET' && url.pathname === '/api/system') return json(res,await systemSnapshot());
     if (req.method === 'GET' && url.pathname === '/api/roles') return json(res,{roles:execution.roleRegistry.list()});
@@ -179,7 +192,7 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
       const launchRequestId=String(input.launchRequestId||'').trim();
       if(!/^[A-Za-z0-9._:-]{8,160}$/.test(launchRequestId))return json(res,{error:'launchRequestId is required'},400);
       if(launches.has(launchRequestId)){const runId=launches.get(launchRequestId);return json(res,{runId,status:(await inspect(runId)).status,idempotent:true},200)}
-      if(activeForeground){const active=await inspect(activeForeground).catch(()=>null);if(active&&['created','launching','running'].includes(active.status))return json(res,{error:'ACTIVE_RUN_EXISTS',activeRunId:active.id},409);activeForeground=null}
+      if(activeForeground){const active=await inspect(activeForeground).catch(()=>null);if(active&&['created','launching','running','waiting-for-human'].includes(active.status))return json(res,{error:'ACTIVE_RUN_EXISTS',activeRunId:active.id},409);activeForeground=null}
       if (!execution.roleRegistry.get(role)) return json(res,{error:`Unknown Role: ${role}`},400);
       const mode=input.mode === 'random' ? 'random' : 'custom'; const workflow=input.workflow || 'research-presentation';
       const {runtime,stages,definition}=execution.runtime(workflow,mode);
@@ -192,24 +205,16 @@ export async function createAgentSuiteApi({ rootDir = path.join(root, 'workspace
     const cancellation=url.pathname.match(/^\/api\/runs\/([^/]+)\/cancel$/);
     if(req.method==='POST'&&cancellation){
       const target=await inspect(cancellation[1]).catch(()=>null);if(!target)return json(res,{error:'Run not found'},404);
-      const mode=target.events.some(event=>event.type==='IntentDiscoveryRequested')?'random':'custom';
-      const value=await execution.runtime(target.workflow,mode).runtime.cancel(target.id);
-      return json(res,{runId:value.id,status:value.status,reasonCode:value.reasonCode},202);
+      const result=await capabilityDispatcher.invoke(normalizeCapabilityInput({type:'CANCEL_RUN',runId:target.id,payload:{}}));
+      return json(res,result,result.accepted?202:409);
     }
     const rerun=url.pathname.match(/^\/api\/runs\/([^/]+)\/rerun$/);
     if (req.method === 'POST' && rerun) {
-      return serializeLaunch(async()=>{
       const input=await readJson(req,{maxBytes:128*1024}); const source=await inspect(rerun[1]); const role=input.role || source.role;
       const launchRequestId=String(input.launchRequestId||'').trim();if(!/^[A-Za-z0-9._:-]{8,160}$/.test(launchRequestId))return json(res,{error:'launchRequestId is required'},400);
-      if(launches.has(launchRequestId)){const runId=launches.get(launchRequestId);return json(res,{runId,status:(await inspect(runId)).status,idempotent:true},200)}
-      if(activeForeground){const active=await inspect(activeForeground).catch(()=>null);if(active&&['created','launching','running'].includes(active.status))return json(res,{error:'ACTIVE_RUN_EXISTS',activeRunId:active.id},409);activeForeground=null}
       if (!execution.roleRegistry.get(role)) return json(res,{error:`Unknown Role: ${role}`},400);
-      const workflow=input.workflow || source.workflow; const {runtime,stages,definition}=execution.runtime(workflow,'custom');
-      const launched=await runtime.launchFork({sourceRunId:source.id,fromStage:input.from || 'synthesis',role,workflow,stages,launchRequestId,workflowDefinition:definition});
-      launches.set(launchRequestId,launched.run.id);activeForeground=launched.run.id;
-      launched.completion.catch(error => console.error(`[AgentSuite rerun] ${launched.run.id}: ${error.message}`)).finally(()=>{if(activeForeground===launched.run.id)activeForeground=null});
-      return json(res,{runId:launched.run.id,status:'running'},202);
-      });
+      const capabilityId=role!==source.role?'run.branch':'run.retry',result=await capabilityDispatcher.invoke(normalizeCapabilityInput({type:'INVOKE_CAPABILITY',runId:source.id,payload:{capabilityId,invocationId:launchRequestId,input:{fromStage:input.from||'synthesis',...(capabilityId==='run.branch'?{role}:{})}}}));
+      return json(res,result,result.accepted?202:409);
     }
     if (req.method === 'GET') {
       const requested=url.pathname==='/'?'/index.html':url.pathname;

@@ -20,7 +20,8 @@ export function createResearchHarness({ researchService, artifactStore }) {
       const sessionId = `runtime-${run.id}`;
       const researchProfile=context.showcase?.researchProfile||brief.data.showcase?.researchProfile||'default';
       if(context.showcase)for(const document of context.showcaseDocuments||[])researchService.addContext({name:`${context.showcase.id}/${document.file.split('/').slice(2).join('/')}`,text:document.content,sourceKind:'example'});
-      const started = researchService.start({ sessionId, origin:'user', mode:'deep', brief:brief.data,researchProfile,showcase:context.showcase||brief.data.showcase||null,temperature:config.temperature, style:config.style, observe, createOperationId, researchOnly:true,signal });
+      const effectiveBrief=config.extensionFocus?{...brief.data,question:`${brief.data.question||run.intent}\n\nДополнительный фокус: ${config.extensionFocus}`,extension:{focus:config.extensionFocus,sourceRef:config.sourceRef||null,evidenceRef:config.evidenceRef||null}}:brief.data;
+      const started = researchService.start({ sessionId, origin:'user', mode:'deep', brief:effectiveBrief,researchProfile,showcase:context.showcase||brief.data.showcase||null,temperature:config.temperature, style:config.style, observe, createOperationId, researchOnly:true,signal });
       const finished = await researchService.wait(started.generationId);
       if (finished.state === 'needs-context') {
         const cause=finished.failureCause || 'insufficient-context';

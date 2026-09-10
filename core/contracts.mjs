@@ -2,6 +2,16 @@ export const EVENT_TYPES = Object.freeze([
   'RunRequested',
   'RunLaunching',
   'RunStarted',
+  'HumanInterruptCreated',
+  'RunWaitingForHuman',
+  'HumanResponseReceived',
+  'HumanResponseRejected',
+  'HumanInterruptResolved',
+  'HumanInterruptCancelled',
+  'RunResumed',
+  'HumanCapabilityInvoked',
+  'HumanContinuationStarted',
+  'HumanContinuationCompleted',
   'RunNeedsContext',
   'RunCancelled',
   'RunCancellationSettled',
@@ -80,6 +90,6 @@ export function createEvent({ type, runId, payload = {}, sequence = 0 } = {}) {
   return { id:eventId, eventId, sequence:value, type: type.trim(), runId, at: new Date().toISOString(), payload };
 }
 
-export function createArtifact({ runId, type, data, sourceArtifactIds = [] } = {}) {
-  return { id: `artifact-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, runId, type, sourceArtifactIds: [...sourceArtifactIds], createdAt: new Date().toISOString(), data };
+export function createArtifact({ id = null, runId, type, data, sourceArtifactIds = [] } = {}) {
+  return { id:id||`artifact-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, runId, type, sourceArtifactIds: [...sourceArtifactIds], createdAt: new Date().toISOString(), data };
 }

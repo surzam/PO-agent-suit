@@ -11,13 +11,16 @@ const PRIMARY_OUTPUT_TYPES=new Set(['Narrative','DataArtifact','Presentation']);
 const statusText={created:'Подготавливаем исследование.',launching:'Создаём исследование.',running:'Исследование идёт. Откройте его, чтобы видеть текущую операцию.',completed:'Готово. Выберите: прочитать вывод, исследовать данные или открыть слайды.',cancelled:'Исследование отменено. Незавершённые действия больше не меняют результат.',interrupted:'Исследование было прервано перезапуском AgentSuite.',failed:'Исследование не завершилось.'};
 let mode='random',view='start',currentRunId=localStorage.getItem('agentsuite.currentRunId'),run=null,briefReady=false,session='session-'+crypto.randomUUID(),beforeArtifact='result',launching=false,pendingLaunchRequestId=null;
 
-const obsMode=new ObservationMode($('#observation'),{openArtifact});
+const obsMode=new ObservationMode($('#observation'),{openArtifact,respondToInterrupt,invokeCapability});
 const store=new ObservationStore((state,meta)=>{
   obsMode.render(state,meta);
   if([...TERMINAL,'needs-context'].includes(state.status))renderResult(state.runId).then(()=>{
     if(currentRunId===state.runId&&$('#artifact').hidden)screen('result');
   });
 });
+
+async function respondToInterrupt(interruptId,response){const value=await invokeCapability({capabilityId:'run.respond-to-interrupt',input:{interruptId,response}});await store.refresh();return value;}
+async function invokeCapability({capabilityId,invocationId=crypto.randomUUID(),input={}}){const response=await fetch(`/api/ag-ui/runs/${encodeURIComponent(currentRunId)}/input`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({type:'INVOKE_CAPABILITY',payload:{capabilityId,invocationId,input}})}),value=await response.json();if(!response.ok||!value.accepted)throw new Error(value.reasonCode||value.error||'Runtime не принял действие');if(value.runId&&value.runId!==currentRunId){rememberRun(value.runId);await attachRun(value.runId,'observation')}return value;}
 
 function screen(name){
   view=name;
@@ -105,7 +108,7 @@ async function renderResult(id=currentRunId){
   const title=value.intent||'Новое исследование';
   $('#resultTitle').textContent=title;$('#resultTitle').title=title;
   $('#resultArtifacts').replaceChildren();$('#ctoFork').hidden=true;
-  $('#cancelRun').hidden=!['created','launching','running'].includes(value.status);
+  $('#cancelRun').hidden=!['created','launching','running','waiting-for-human'].includes(value.status);
   $('#newGeneration').hidden=!TERMINAL.has(value.status)&&value.status!=='needs-context';
   if(value.status==='completed'){
     const outputs=value.artifacts.filter(item=>PRIMARY_OUTPUT_TYPES.has(item.type));
@@ -123,13 +126,12 @@ async function renderResult(id=currentRunId){
 
 async function addSource(){
   const input=document.createElement('input');input.type='file';input.accept='.md,.txt,.json,.csv,.tsv,.yaml,.yml,.js,.mjs,.ts,.html,.css';
-  input.onchange=async()=>{const file=input.files?.[0];if(!file)return;const response=await fetch('/api/context',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({name:file.name,content:await file.text()})}),value=await response.json();if(!response.ok)return alert(value.error);await rerun('research',run.role)};
+  input.onchange=async()=>{const file=input.files?.[0];if(!file)return;try{await invokeCapability({capabilityId:'context.add',input:{name:file.name,content:await file.text()}})}catch(error){alert(error.message)}};
   input.click();
 }
 
 async function rerun(from,role){
-  const response=await fetch(`/api/runs/${encodeURIComponent(currentRunId)}/rerun`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({launchRequestId:crypto.randomUUID(),from,role,workflow:'research-presentation'})});
-  const value=await response.json();if(response.status===409&&value.activeRunId)return attachRun(value.activeRunId,'observation');if(!response.ok)return alert(value.error);await attachRun(value.runId,'observation');
+  try{return await invokeCapability({capabilityId:role&&role!==run?.role?'run.branch':'run.retry',input:{fromStage:from,...(role&&role!==run?.role?{role}:{})}})}catch(error){alert(error.message)}
 }
 
 function presentationHtml(value){
@@ -181,10 +183,10 @@ async function openArtifact(id){
 function markdown(value){return String(value).split('\n').map(line=>{const text=esc(line);if(/^# /.test(line))return`<h1>${text.slice(2)}</h1>`;if(/^## /.test(line))return`<h2>${text.slice(3)}</h2>`;if(/^[-*] /.test(line))return`<li>${text.slice(2)}</li>`;return line.trim()?`<p>${text}</p>`:''}).join('')}
 function closeArtifact(){if($('#artifact').hidden)return false;$('#artifact').hidden=true;$('#artifactFrame').srcdoc='';$('#artifactFrame').removeAttribute('src');$('#artifactContent').replaceChildren();$('#windowControl').textContent='×';screen(['result','observation','history'].includes(beforeArtifact)?beforeArtifact:'result');return true}
 function newGeneration(){store.close();run=null;currentRunId=null;localStorage.removeItem('agentsuite.currentRunId');pendingLaunchRequestId=null;briefReady=false;$('#runTabs').hidden=true;$('#ctoFork').hidden=true;$('#resultArtifacts').replaceChildren();screen('start')}
-async function cancelRun(){if(!currentRunId)return;$('#cancelRun').disabled=true;$('#cancelRun').textContent='Отмена…';const response=await fetch(`/api/runs/${encodeURIComponent(currentRunId)}/cancel`,{method:'POST'}),value=await response.json();if(!response.ok){$('#cancelRun').disabled=false;$('#cancelRun').textContent='Отменить';return alert(value.error)}await renderResult(currentRunId)}
+async function cancelRun(){if(!currentRunId)return;$('#cancelRun').disabled=true;$('#cancelRun').textContent='Отмена…';try{await invokeCapability({capabilityId:'run.cancel'});await renderResult(currentRunId)}catch(error){$('#cancelRun').disabled=false;$('#cancelRun').textContent='Отменить';alert(error.message)}}
 async function copyDiagnostics(){const value=await fetch('/api/diagnostics').then(response=>response.json());await navigator.clipboard.writeText(JSON.stringify(value,null,2));$('#copyDiagnostics').textContent='Скопировано';setTimeout(()=>$('#copyDiagnostics').textContent='Диагностика',1200)}
 
-const humanStatus=status=>({completed:'Готово',running:'Идёт исследование',launching:'Подготавливается',created:'Подготавливается',failed:'Не завершено',cancelled:'Отменено',interrupted:'Прервано','needs-context':'Нужны данные'}[status]||'Неизвестно');
+const humanStatus=status=>({completed:'Готово',running:'Идёт исследование','waiting-for-human':'Ждёт решения',launching:'Подготавливается',created:'Подготавливается',failed:'Не завершено',cancelled:'Отменено',interrupted:'Прервано','needs-context':'Нужны данные'}[status]||'Неизвестно');
 function historyTitle(item){return item.intent||'Случайный ракурс'}
 async function openHistory(){
   screen('history');const list=$('#historyList');list.innerHTML='<p>Загружаю историю…</p>';
