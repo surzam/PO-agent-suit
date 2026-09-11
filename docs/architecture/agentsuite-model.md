@@ -93,6 +93,11 @@ The Runtime assigns artifact IDs, persists artifacts, appends events, correlates
 
 Validation creates a new `ValidationReport` that references an immutable `EvidenceSet`; it does not rewrite Research history.
 
+`valid` is structural admissibility, not factual confirmation. Explicit
+epistemic classification and its limited source-reported authority are described
+in [Truth Integrity](truth-integrity.md). Narrative strength must not treat schema
+success or repeated Evidence references as stronger factual support.
+
 ## R6 synthesis boundary
 
 `SynthesisPlan` is the semantic contract between validated research and future output-producing Harnesses. It references `Brief`, `EvidenceSet` and `ValidationReport`, records objective/audience, and stores key claims with explicit Evidence IDs or an explicit non-factual kind such as `interpretation`, `assumption`, `recommendation` or `unknown`.

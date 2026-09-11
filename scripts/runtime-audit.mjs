@@ -73,7 +73,7 @@ try {
   const storyArtifact = researchRun.artifacts.find(item => item.type === 'PresentationStoryPlan');
   assert.ok(briefArtifact && evidenceArtifact && validationArtifact && synthesisArtifact && narrativeArtifact && dataArtifactMeta && storyArtifact && presentationArtifact);
   assert.deepEqual(synthesisArtifact.sourceArtifactIds, [briefArtifact.id, evidenceArtifact.id, validationArtifact.id]);
-  assert.deepEqual(narrativeArtifact.sourceArtifactIds, [synthesisArtifact.id, dataArtifactMeta.id]);
+  assert.deepEqual(narrativeArtifact.sourceArtifactIds, [synthesisArtifact.id, dataArtifactMeta.id, validationArtifact.id]);
   assert.deepEqual(dataArtifactMeta.sourceArtifactIds, [synthesisArtifact.id, evidenceArtifact.id, validationArtifact.id]);
   assert.deepEqual(storyArtifact.sourceArtifactIds,[synthesisArtifact.id,dataArtifactMeta.id]);
   assert.deepEqual(presentationArtifact.sourceArtifactIds, [storyArtifact.id, dataArtifactMeta.id]);

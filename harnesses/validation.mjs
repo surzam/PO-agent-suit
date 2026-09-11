@@ -20,7 +20,14 @@ export const validationHarness = Object.freeze({
       if (!String(item.sourceUri || '').trim()) issues.push('missing sourceUri');
       if (!CONFIDENCE.has(item.confidence)) issues.push('invalid confidence');
       if (!KINDS.has(item.kind)) issues.push('invalid kind');
-      return { decisionId:`validation:${String(item.id || 'missing')}`, evidenceId: item.id || null, valid: issues.length === 0, issues };
+      // valid remains a legacy structural gate, not factual confirmation.
+      const structurallyValid=issues.length===0;
+      const epistemicStatus=item.confidence==='conflicted'?'conflicted':
+        structurallyValid&&item.kind==='fact'&&['direct','corroborated'].includes(item.confidence)?'supported':'uncertain';
+      return {decisionId:`validation:${String(item.id||'missing')}`,evidenceId:item.id||null,
+        valid:structurallyValid,structurallyValid,epistemicStatus,
+        epistemicBasis:'source-reported; no independent verification',
+        evidenceKind:item.kind,confidence:item.confidence,claim:String(item.claim||''),sourceUri:item.sourceUri||null,issues};
     });
     const inherited = evidenceSet.data.metadata || {};
     const conflicts = Array.isArray(inherited.conflicts) ? inherited.conflicts : [];

@@ -1,3 +1,58 @@
-const levels=['unsupported','weak','moderate','strong'];
-export function deriveNarrativeStrength({supportingClaims=[],counterClaims=[],unresolvedClaims=[],validation=[]}={}){const decisions=new Map(validation.map(v=>[String(v.evidenceId),v]));const valid=ids=>ids.filter(id=>decisions.get(String(id))?.valid===true);const uncertain=ids=>ids.filter(id=>decisions.get(String(id))?.valid!==true);const basis={supportingValidated:[],supportingUncertain:[],counterValidated:[],unresolved:unresolvedClaims.map(c=>c.id||c)};for(const c of supportingClaims){for(const id of c.evidenceIds||[]) (decisions.get(String(id))?.valid===true?basis.supportingValidated:basis.supportingUncertain).push(String(id));}for(const c of counterClaims)for(const id of c.evidenceIds||[])if(decisions.get(String(id))?.valid===true)basis.counterValidated.push(String(id));const s=basis.supportingValidated.length,c=basis.counterValidated.length,u=basis.supportingUncertain.length+unresolvedClaims.length;let level='unsupported';if(s>0)level=s>=2&&c===0&&u===0?'strong':c>0||u>0?'moderate':'weak';return{level,basis:{...basis,supportingValidated:[...new Set(basis.supportingValidated)],supportingUncertain:[...new Set(basis.supportingUncertain)],counterValidated:[...new Set(basis.counterValidated)]}};}
-export function buildNarrativeArgument({synthesis={},validation=[]}={}){const claims=synthesis.keyClaims||[],supportingClaims=claims.filter(c=>['evidence-backed','interpretation'].includes(c.kind)),counterClaims=claims.filter(c=>['counter','rejected'].includes(c.kind)),unresolvedClaims=claims.filter(c=>['unknown','assumption'].includes(c.kind));const strength=deriveNarrativeStrength({supportingClaims,counterClaims,unresolvedClaims,validation});return{thesis:synthesis.objective||synthesis.centralThesis||'',roleLens:synthesis.audience||null,supportingClaims:supportingClaims.map(c=>c.id),counterClaims:counterClaims.map(c=>c.id),unresolvedClaims:unresolvedClaims.map(c=>c.id),assumptions:(synthesis.assumptions||[]),gaps:(synthesis.uncertainties||[]),strength:strength.level,strengthBasis:strength.basis};}
+const unique=values=>[...new Set(values.filter(v=>v!==undefined&&v!==null).map(String))].sort();
+const refs=claims=>unique(claims.flatMap(c=>c.evidenceIds||[]));
+const supported=d=>d?.epistemicStatus==='supported'&&d.structurallyValid===true&&d.evidenceKind==='fact';
+
+export function deriveNarrativeStrength({supportingClaims=[],counterClaims=[],unresolvedClaims=[],validation=[],conflicts=[],unknowns=[],assumptions=[],gaps=[]}={}) {
+  // Resolve canonical evidence identity before weighting. Ambiguous duplicate
+  // decisions fail closed; their order must not choose factual authority.
+  const decisions=new Map();
+  for(const d of validation){const id=String(d.evidenceId),previous=decisions.get(id);
+    decisions.set(id,previous&&JSON.stringify(previous)!==JSON.stringify(d)?{epistemicStatus:'uncertain'}:d);}
+  const counterEvidence=unique([...refs(counterClaims),...validation.filter(d=>d.epistemicStatus==='conflicted').map(d=>d.evidenceId)]);
+  const support=refs(supportingClaims).filter(id=>!counterEvidence.includes(id));
+  const basis={supportingValidated:support.filter(id=>supported(decisions.get(id))),
+    supportingUncertain:support.filter(id=>!supported(decisions.get(id))),counterEvidence,
+    counterValidated:counterEvidence.filter(id=>supported(decisions.get(id))),
+    unresolved:unique(unresolvedClaims.map(c=>c.id||c)),conflicts:unique(conflicts),unknowns:unique(unknowns),
+    assumptions:unique(assumptions),gaps:unique(gaps),
+    authority:'source-reported support; independence and causal inference not established',ceiling:'weak'};
+  // Current truth has no independent verification. Counts cannot justify
+  // moderate/strong; unresolved/counter evidence can never increase strength.
+  return {level:basis.supportingValidated.length?'weak':'unsupported',basis};
+}
+
+export function buildNarrativeArgument({synthesis={},validation=[],validationReport={}}={}) {
+  const decisions=validationReport.items||validation;
+  const byEvidence=new Map(decisions.map(d=>[String(d.evidenceId),d]));
+  const details=[],seen=new Set();
+  for(const c of synthesis.keyClaims||[]){if(!c.id||seen.has(String(c.id)))continue;seen.add(String(c.id));
+    details.push({...c,id:String(c.id),evidenceIds:unique(c.evidenceIds||[]),refType:'claim'});}
+  const linked=new Set(refs(details));
+  // These are explicit Evidence references, not invented Synthesis claims or
+  // an assertion that the omitted evidence disproves the thesis.
+  for(const d of decisions)if(d.epistemicStatus==='conflicted'&&!linked.has(String(d.evidenceId))&&d.evidenceId){
+    details.push({id:String(d.evidenceId),claim:d.claim||'',kind:d.evidenceKind||'unknown',evidenceIds:[String(d.evidenceId)],refType:'evidence'});
+    linked.add(String(d.evidenceId));
+  }
+  const counter=details.filter(c=>c.evidenceIds.some(id=>byEvidence.get(id)?.epistemicStatus==='conflicted'));
+  const counterIds=new Set(counter.map(c=>c.id));
+  const supporting=details.filter(c=>!counterIds.has(c.id)&&c.kind==='evidence-backed'&&c.evidenceIds.length);
+  const unresolved=details.filter(c=>!counterIds.has(c.id)&&(!supporting.includes(c)||c.evidenceIds.some(id=>!supported(byEvidence.get(id)))));
+  const assumptions=unique([...(synthesis.assumptions||[]),...details.filter(c=>c.kind==='assumption').map(c=>c.claim)]);
+  const gaps=unique([...(synthesis.uncertainties||[]),...(validationReport.unknowns||[])]);
+  const strength=deriveNarrativeStrength({supportingClaims:supporting,counterClaims:counter,unresolvedClaims:unresolved,validation:decisions,
+    conflicts:validationReport.conflicts||[],unknowns:validationReport.unknowns||[],assumptions,gaps});
+  return {thesis:synthesis.objective||synthesis.centralThesis||'',roleLens:synthesis.audience||null,
+    supportingClaims:unique(supporting.map(c=>c.id)),counterClaims:unique(counter.map(c=>c.id)),unresolvedClaims:unique(unresolved.map(c=>c.id)),
+    claimDetails:details,assumptions,gaps,strength:strength.level,strengthBasis:strength.basis};
+}
+
+// Markdown is a pure view of the persisted argument, not another author.
+const text=value=>String(value??'').replace(/[\\`*_{}\[\]<>#]/g,'\\$&').replace(/\r?\n/g,' ');
+export function materializeNarrativeMarkdown(argument){
+  const details=new Map(argument.claimDetails.map(c=>[c.id,c]));
+  const section=(title,ids)=>`## ${title}\n\n${ids.length?ids.map(id=>{const c=details.get(id);return `- ${text(c?.claim||id)} (${text(c?.refType)}: ${text(id)}; Evidence: ${text((c?.evidenceIds||[]).join(', '))})`;}).join('\n'):'Не указано.'}`;
+  return ['# Интерпретация',text(argument.thesis),`Сила аргумента: ${argument.strength}. Независимость источников и достоверность не установлены.`,
+    section('Выбранные опоры — требуют проверки',argument.supportingClaims),section('Ограничивающие сведения — отмечены расхождения',argument.counterClaims),section('Неопределённости и предложения',argument.unresolvedClaims),
+    '## Предположения',...argument.assumptions.map(v=>`- ${text(v)}`),'## Ограничения и неизвестности',...unique([...argument.gaps,...argument.strengthBasis.conflicts]).map(v=>`- ${text(v)}`)].join('\n\n');
+}
