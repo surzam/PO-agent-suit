@@ -1,0 +1,1 @@
+import assert from 'node:assert/strict';import {deriveHypothesisPlan} from '../core/po-hypothesis.mjs';const h=deriveHypothesisPlan({narrative:{thesis:'x'},dataArtifact:{id:'d',data:{numericMetrics:[['m',4,'units']]}}});assert.equal(h.primaryMetric.sourceArtifactIds[0],'d');assert.equal(h.target,null);console.log('HYPOTHESIS_METRICS_AUDIT PASS');

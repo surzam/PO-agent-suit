@@ -1,0 +1,5 @@
+import assert from 'node:assert/strict';
+import {deriveNarrativeStrength,buildNarrativeArgument} from '../core/narrative-argument.mjs';
+const validation=[{evidenceId:'e1',valid:true,status:'validated'},{evidenceId:'e2',valid:false,status:'unknown'}];
+const narrative=buildNarrativeArgument({synthesis:{objective:'Ownership may reduce onboarding friction',audience:'PO',keyClaims:[{id:'c1',claim:'fact',evidenceIds:['e1'],kind:'evidence-backed'},{id:'c2',claim:'unknown',evidenceIds:['e2'],kind:'unknown'},],uncertainties:['baseline missing']},validation});
+assert.equal(narrative.thesis,'Ownership may reduce onboarding friction');assert.deepEqual(narrative.supportingClaims,['c1']);assert.deepEqual(narrative.unresolvedClaims,['c2']);assert.equal(narrative.strength,'moderate');assert.equal(typeof narrative.strengthBasis,'object');assert.notEqual(narrative.strength,0.87);assert.equal(deriveNarrativeStrength({supportingClaims:[],validation:[]}).level,'unsupported');console.log('NARRATIVE_ARGUMENT_AUDIT PASS');
