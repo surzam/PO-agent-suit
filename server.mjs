@@ -417,7 +417,7 @@ const styleCss = { editorial:'--bg:#f3eee4;--ink:#18212b;--accent:#1d5c45;--soft
 for (const template of templates) styleCss[template.slug] = templateTheme(template.slug);
 function sceneVisual(scene, index, total, chartHtml = '') {
   const evidence=[...new Map((scene.evidence || []).map(value=>[String(value).trim().toLowerCase(),String(value).trim()])).values()].filter(Boolean).slice(0,4); const cards=evidence.map((value,i)=>`<article class="evidence-card reveal"><b>0${i+1}</b><p>${esc(value)}</p></article>`).join('');
-  const header=`<header class="scene-header reveal"><span>${String(index+1).padStart(2,'0')} / ${String(total).padStart(2,'0')}</span><em>${esc(scene.visualType)}</em></header>`;
+  const header=`<header class="scene-header reveal"><span>${String(index+1).padStart(2,'0')} / ${String(total).padStart(2,'0')}</span><em>${esc(scene.semanticRole || scene.visualType)}</em></header>`;
   const footer=`<footer class="scene-footer reveal"><span>${esc(scene.thesis)}</span><b>${index===total-1?'NEXT →':String(index+1).padStart(2,'0')}</b></footer>`;
   if (index === 0) return `${header}<div class="title-composition"><span class="title-index reveal">01</span><h1 class="reveal">${esc(scene.title)}</h1><p class="lead reveal">${esc(scene.thesis)}</p></div>${chartHtml}${footer}`;
   if (index === total-1) return `${header}<div class="closing-composition"><p class="closing-kicker reveal">Следующий ход</p><h1 class="reveal">${esc(scene.title)}</h1><p class="lead reveal">${esc(scene.thesis)}</p><div class="closing-line reveal"></div></div>${footer}`;

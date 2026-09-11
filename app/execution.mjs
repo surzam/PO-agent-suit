@@ -7,6 +7,7 @@ import { briefHarness } from '../harnesses/brief.mjs';
 import { validationHarness } from '../harnesses/validation.mjs';
 import { createSynthesisHarness } from '../harnesses/synthesis.mjs';
 import { createNarrativeHarness } from '../harnesses/narrative.mjs';
+import { createHypothesisHarness } from '../harnesses/hypothesis.mjs';
 import { createDataHarness } from '../harnesses/data.mjs';
 import { createSlidesHarness } from '../harnesses/slides.mjs';
 import { createPresentationStoryPlannerHarness } from '../harnesses/presentation-story-planner.mjs';
@@ -60,6 +61,7 @@ export async function createSuiteExecution({ rootDir, eventSink = null }) {
     if(stages.some(stage=>stage.id==='synthesis'))registry.register(createSynthesisHarness({modelJson}));
     if(stages.some(stage=>stage.id==='data'))registry.register(createDataHarness({dataFromEvidence}));
     if(stages.some(stage=>stage.id==='narrative'))registry.register(createNarrativeHarness({narrativeMarkdown}));
+    if(stages.some(stage=>stage.id==='hypothesis'))registry.register(createHypothesisHarness());
     if(stages.some(stage=>stage.id==='slides'))registry.register(createSlidesHarness({slidesHtml,resolvePresentationStyle}));
     if(stages.some(stage=>stage.id==='presentation-story'))registry.register(createPresentationStoryPlannerHarness());
     if(stages.some(stage=>stage.id==='interactive-result'))registry.register(createInteractiveResultHarness({modelJson}));

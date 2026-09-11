@@ -1,0 +1,1 @@
+import assert from 'node:assert/strict';import {chartSpecsFromDataArtifact} from '../core/metric-chart.mjs';const d={id:'d',data:{numericMetrics:[['conversion',12,'%']],rows:[[12]]}};const c=chartSpecsFromDataArtifact(d);assert.equal(c[0].sourceArtifactId,'d');assert.deepEqual(c[0].rowRefs,['d:row:1']);console.log('PO_DECK_CHARTS_AUDIT PASS');
