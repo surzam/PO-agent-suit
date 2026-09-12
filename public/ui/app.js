@@ -98,7 +98,7 @@ async function attachRun(id,target='result'){
 }
 
 function reasonText(value){
-  return ({'provider-unavailable':'Локальная модель недоступна. Запустите модель и попробуйте снова.','inference-timeout':'Модель не успела завершить действие. Попробуйте ещё раз.','research-timeout':'Исследование достигло безопасного предела времени.','malformed-response':'Модель вернула ответ, который нельзя безопасно использовать. Попробуйте ещё раз.','source-unavailable':'Один из источников недоступен.','source-timeout':'Один из источников не ответил вовремя.','artifact-unavailable':'Результат не был сохранён или не открывается.','user-cancelled':'Исследование отменено пользователем.','runtime-interrupted':'AgentSuite был перезапущен до завершения исследования.'}[value]||statusText.failed);
+  return ({'provider-unavailable':'Локальная модель недоступна. Запустите модель и попробуйте снова.','inference-timeout':'Истекло время ожидания модели. Попробуйте более короткий вопрос и меньше материалов. В диагностике можно проверить, на каком шаге остановилась работа.','research-timeout':'Исследование достигло безопасного предела времени.','malformed-response':'Модель вернула ответ, который нельзя безопасно использовать. Попробуйте ещё раз.','source-unavailable':'Один из источников недоступен.','source-timeout':'Один из источников не ответил вовремя.','artifact-unavailable':'Результат не был сохранён или не открывается.','user-cancelled':'Исследование отменено пользователем.','runtime-interrupted':'AgentSuite был перезапущен до завершения исследования.'}[value]||statusText.failed);
 }
 
 function appendOutputButton(container,artifact,{primary=false}={}){

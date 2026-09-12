@@ -14,6 +14,7 @@ import { createSynthesisHarness } from '../harnesses/synthesis.mjs';
 import { createDataHarness } from '../harnesses/data.mjs';
 import { createPresentationStoryPlannerHarness } from '../harnesses/presentation-story-planner.mjs';
 import { createNarrativeHarness } from '../harnesses/narrative.mjs';
+import { createHypothesisHarness } from '../harnesses/hypothesis.mjs';
 import { createSlidesHarness } from '../harnesses/slides.mjs';
 import { workflowDefinition } from '../app/workflows.mjs';
 import { loadShowcaseCatalog,selectShowcasePack } from '../showcase/catalog.mjs';
@@ -21,7 +22,7 @@ import { loadShowcaseCatalog,selectShowcasePack } from '../showcase/catalog.mjs'
 process.env.PO_AGENT_NO_LISTEN='1';
 const {narrativeMarkdown,slidesHtml,resolvePresentationStyle}=await import('../server.mjs');
 const catalog=await loadShowcaseCatalog();
-assert.equal(catalog.length,5);
+assert.equal(catalog.length,6);
 for(const pack of catalog){assert.equal(pack.sourceKind,'example');assert.equal(pack.displayLabel,'Демонстрационный контекст');assert.ok(pack.documents.length>=3);assert.ok(!pack.documents.some(document=>/answer|final-conclusion|recommended-decision/i.test(document.file)))}
 assert.equal(selectShowcasePack(catalog,'stable-seed').id,selectShowcasePack(catalog,'stable-seed').id);
 assert.deepEqual(workflowDefinition('research-presentation','random').stages.slice(1).map(stage=>stage.harnessId),workflowDefinition('research-presentation','custom').stages.slice(1).map(stage=>stage.harnessId),'Random and Custom share every downstream harness');
@@ -32,6 +33,11 @@ try{
     const packRoot=path.join(root,pack.id),store=createArtifactStore(path.join(packRoot,'legacy'));await store.initialize();
     const source={id:'example',provider:'showcase',operationTimeoutMs:1000,async search(){return pack.documents.map((document,index)=>({sourceId:`example:${pack.id}:${index}`,sourceUri:`example://${pack.id}/${index}`,sourceTitle:document.file,sourceKind:'example',text:document.content}))}};
     const modelJson=async(system,user)=>{
+      if(system.includes('извлекаешь Evidence')){
+        const input=JSON.parse(user);
+        assert.ok(input.sources.length<=3,'showcase source batch is bounded');
+        assert.ok(input.sources.reduce((sum,source)=>sum+source.text.length,0)<=6000,'showcase source text budget');
+      }
       if(system.includes('Intent Discovery Harness'))return{status:'discovered',question:`Какое решение следует принять по сценарию ${pack.name}?`,reason:'Контекст содержит измеримые сигналы и позиции участников.',relevance:'Нужно выбрать следующий продуктовый шаг.',expectedDecision:'Выбрать действие с учётом риска.',requiredContext:[]};
       if(system.includes('планировщик deep research'))return{needs:[1,2,3].map(index=>({title:`Линия ${index}`,query:`${pack.id} evidence-${index}`,dods:[{criterion:`Проверить source unit ${index}`}]}))};
       if(system.includes('извлекаешь Evidence')){const input=JSON.parse(user),ordinal=Number(String(input.need.query).match(/evidence-(\d)/)?.[1]||1);return{evidence:input.sources.slice(0,3).map(item=>{const statements=String(item.text).split(/\r?\n/).flatMap(line=>line.match(/[^.!?]+[.!?]?/g)||[]).map(value=>value.trim()).filter(value=>value&&!value.startsWith('#'));const claim=statements[(ordinal-1)%statements.length];return{claim,quote:claim,sourceRef:item.ref,confidence:'direct',kind:'fact'}}),conflicts:ordinal===2?['Две позиции участников требуют выбора при неполной оценке стоимости.']:[],unknowns:ordinal===3?['Один фактор требует дополнительной проверки.']:[]}}
@@ -39,7 +45,7 @@ try{
       throw new Error(`Unexpected model prompt: ${system.slice(0,60)}`);
     };
     const research=createResearchService({modelJson,sources:[source],render:async()=>{throw new Error('researchOnly boundary violated')},store,limits:{timeoutMs:5000,maxSourceCalls:20,maxWebPages:0}});
-    const registry=createHarnessRegistry([createIntentDiscoveryHarness({modelJson}),briefHarness,createResearchHarness({researchService:research,artifactStore:store}),validationHarness,createSynthesisHarness({modelJson}),createDataHarness({dataFromEvidence}),createPresentationStoryPlannerHarness(),createNarrativeHarness({narrativeMarkdown}),createSlidesHarness({slidesHtml,resolvePresentationStyle})]);
+    const registry=createHarnessRegistry([createIntentDiscoveryHarness({modelJson}),briefHarness,createResearchHarness({researchService:research,artifactStore:store}),validationHarness,createSynthesisHarness({modelJson}),createDataHarness({dataFromEvidence}),createPresentationStoryPlannerHarness(),createNarrativeHarness({narrativeMarkdown}),createHypothesisHarness(),createSlidesHarness({slidesHtml,resolvePresentationStyle})]);
     const definition=workflowDefinition('research-presentation','random'),runtime=createRuntime({rootDir:packRoot,registry,observability:true,defaultAllowEmptyIntent:true,contextProvider:()=>({availableContext:pack.documents,showcase:{id:pack.id,name:pack.name,description:pack.description,sourceKind:'example',displayLabel:pack.displayLabel,seedKey:pack.seedKey,recommendedStyleId:pack.recommendedStyleId,researchProfile:'showcase'}})});
     const started=Date.now(),run=await runtime.run({intent:'',role:'product-owner',workflow:'research-presentation',allowEmptyIntent:true,launchRequestId:`showcase-${pack.seedKey}`,workflowDefinition:definition,stages:definition.stages});
     assert.equal(run.status,'completed',JSON.stringify(run.events.slice(-5)));

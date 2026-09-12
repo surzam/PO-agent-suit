@@ -11,7 +11,6 @@ function alive(pid){try{process.kill(Number(pid),0);return true}catch{return fal
 export function createProviderScheduler({providerId='local-model',crossProcess=true}={}){
   const key=createHash('sha256').update(providerId).digest('hex').slice(0,16);
   const lockDir=path.join(os.tmpdir(),`agentsuite-provider-${key}.lock`);
-  let tail=queues.get(key)||Promise.resolve();
   async function acquire(signal){
     if(!crossProcess)return async()=>{};
     while(true){
@@ -25,12 +24,28 @@ export function createProviderScheduler({providerId='local-model',crossProcess=t
       }
     }
   }
-  async function schedule(task,{signal}={}){
-    let releaseTurn;const turn=new Promise(resolve=>{releaseTurn=resolve});const previous=tail;tail=previous.then(()=>turn);queues.set(key,tail);
-    await previous;
+  async function schedule(task,{signal,timeoutMs}={}){
+    const controller=new AbortController();
+    const abort=()=>controller.abort(Object.assign(new Error('Operation cancelled'),{code:'ABORTED'}));
+    if(signal?.aborted)abort();else signal?.addEventListener('abort',abort,{once:true});
+    const timer=Number.isFinite(timeoutMs)&&timeoutMs>0?setTimeout(()=>controller.abort(Object.assign(new Error('LLM request timed out (including queue)'),{code:'INFERENCE_TIMEOUT'})),timeoutMs):null;
+    let rejectAbort;
+    const aborted=new Promise((_,reject)=>{rejectAbort=()=>reject(controller.signal.reason);if(controller.signal.aborted)rejectAbort();else controller.signal.addEventListener('abort',rejectAbort,{once:true})});
+    let releaseTurn;const turn=new Promise(resolve=>{releaseTurn=resolve});const previous=queues.get(key)||Promise.resolve();const tail=previous.then(()=>turn);queues.set(key,tail);
     let releaseLease=async()=>{};
-    try{releaseLease=await acquire(signal);return await task()}
-    finally{await releaseLease();releaseTurn();if(queues.get(key)===tail)queues.delete(key)}
+    const execution=(async()=>{
+      await previous;
+      try{
+        if(controller.signal.aborted)throw controller.signal.reason;
+        releaseLease=await acquire(controller.signal);
+        if(controller.signal.aborted)throw controller.signal.reason;
+        return await task(controller.signal);
+      }finally{
+        await releaseLease();releaseTurn();if(queues.get(key)===tail)queues.delete(key);
+      }
+    })();
+    try{return await Promise.race([execution,aborted])}
+    finally{clearTimeout(timer);signal?.removeEventListener('abort',abort);controller.signal.removeEventListener('abort',rejectAbort)}
   }
   return{schedule,providerId};
 }

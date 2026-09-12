@@ -2,7 +2,9 @@ import crypto from 'node:crypto';
 
 const STAGES = ['brief', 'scout', 'planning', 'researching', 'validating', 'synthesizing', 'rendering', 'complete'];
 const DEFAULT_LIMITS = { timeoutMs: 10 * 60_000, maxSourceCalls: 24, maxIterationsPerDod: 4, stagnationLimit: 2, maxWebPages: 3 };
-const RESEARCH_PROFILES=Object.freeze({default:{minNeeds:2,maxNeeds:2,documentsPerNeed:2,documentChars:2000},showcase:{minNeeds:3,maxNeeds:4,documentsPerNeed:4,documentChars:5000}});
+// Examples still use the real research path, but do not need larger prompts
+// than a normal session. Three lines preserve observations and alternatives.
+const RESEARCH_PROFILES=Object.freeze({default:{minNeeds:2,maxNeeds:2,documentsPerNeed:2,documentChars:2000},showcase:{minNeeds:3,maxNeeds:3,documentsPerNeed:3,documentChars:2000}});
 const briefId = () => `brief-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
 const generationId = () => `gen-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
 function safeSourceMetadata(source = {}) {

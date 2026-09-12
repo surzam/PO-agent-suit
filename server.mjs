@@ -333,7 +333,7 @@ async function rawModelJson(system, user, { signal, temperature = 0.7, maxTokens
 }
 
 async function modelJson(system,user,options={}){
-  return modelScheduler.schedule(()=>rawModelJson(system,user,options),{signal:options.signal});
+  return modelScheduler.schedule(signal=>rawModelJson(system,user,{...options,signal}),{signal:options.signal,timeoutMs:Number(options.timeoutMs||appConfig.llm?.timeout_ms||300000)});
 }
 async function llama(input, data, temperature) {
   input = { ...input, prompt: input.prompt || selfPrompts[Date.now() % selfPrompts.length] };
