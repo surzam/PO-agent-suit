@@ -85,7 +85,8 @@ try {
   const narrativeFile = path.join(temp, 'runs', researchRun.id, 'artifacts', narrativeArtifact.file.split('/').at(-1));
   const narrative = JSON.parse(await fs.readFile(narrativeFile, 'utf8'));
   assert.equal(narrative.data.synthesisPlanArtifactId, synthesisArtifact.id);
-  assert.match(narrative.data.content, /Provenance сохраняется/);
+  assert.match(narrative.data.content, /Источник сообщает: provenance/);
+  assert.doesNotMatch(narrative.data.content, /Provenance сохраняется/); // extraction quote, not model paraphrase
   assert.doesNotMatch(narrative.data.content, /Непроверенный факт/);
   const dataFile = path.join(temp, 'runs', researchRun.id, 'artifacts', dataArtifactMeta.file.split('/').at(-1));
   const dataArtifact = JSON.parse(await fs.readFile(dataFile, 'utf8'));

@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import {sourceTableFromDocument,subjectMetricsFromTables} from '../core/subject-data.mjs';
 
 const STAGES = ['brief', 'scout', 'planning', 'researching', 'validating', 'synthesizing', 'rendering', 'complete'];
 const DEFAULT_LIMITS = { timeoutMs: 10 * 60_000, maxSourceCalls: 24, maxIterationsPerDod: 4, stagnationLimit: 2, maxWebPages: 3 };
@@ -44,6 +45,7 @@ function snapshot(job) {
   };
 }
 
+import {presentLimitation} from '../public/ui/statement-presentation.js';
 export function createResearchService({ modelJson, sources = [], render, store, limits = {} }) {
   const config = { ...DEFAULT_LIMITS, ...limits };
   const sessions = new Map();
@@ -131,7 +133,7 @@ export function createResearchService({ modelJson, sources = [], render, store, 
   }
 
   async function gather(job, needs, mode) {
-    const evidence = []; const conflicts = []; const unknowns = []; const stats = {},documentCache=new Map();
+    const evidence = []; const conflicts = []; const unknowns = []; const stats = {},documentCache=new Map(),sourceTables=new Map(),admittedSources=new Map();
     let sourceCalls = 0; let webPages = 0;
     const activeSources = sources;
     for (const [needIndex,need] of needs.entries()) {
@@ -146,10 +148,8 @@ export function createResearchService({ modelJson, sources = [], render, store, 
           const deadline=operationDeadline(source.operationTimeoutMs);
           await observe(job, 'CapabilityRequested', { operationId:searchId, capability:source.id.toUpperCase(), provider:source.provider||source.id, operation:'search', displayInput,deadline });
           await observe(job, 'CapabilityStarted', { operationId:searchId, capability:source.id.toUpperCase(), provider:source.provider||source.id, operation:'search', displayInput,deadline });
-          let found = await source.search({ query: `${job.showcase?.id||''} ${need.query} ${job.brief.question}`, limit:job.researchProfile==='showcase'?8:4, signal: job.controller.signal });
-          // A conversational question often contains no repository terms. Keep the
-          // run useful by collecting the real product context; never invent facts.
-          if (!found.length && source.id === 'local') found = await source.search({ query: 'PO Agent Suite product context', limit: 4, signal: job.controller.signal });
+          let found = await source.search({ allowedRunIds:job.brief.sourceRunIds||[], query: `${job.showcase?.id||''} ${need.query} ${job.brief.question}`,demo:job.showcase?.id||false,allowSystemInternal:job.brief.sourceScope==='system-internal', limit:job.researchProfile==='showcase'?8:4, signal: job.controller.signal });
+          // Empty scoped search is an honest gap, not permission to use application code.
           sourceCalls += 1; stats[source.id] = (stats[source.id] || 0) + 1;
           await observe(job, 'CapabilityCompleted', { operationId:searchId, capability:source.id.toUpperCase(), provider:source.provider||source.id,operation:'search', found:found.length });
           emit(job, 'researching', `${source.id}: найдено ${found.length}`, { need:need.title, source:source.id, found:found.length, sourceCalls, evidence:evidence.length, sources:activeSources.map(item => item.id), capability:source.id.toUpperCase() });
@@ -180,9 +180,11 @@ export function createResearchService({ modelJson, sources = [], render, store, 
         continue;
       }
       const uniqueDocuments=[...new Map(documents.map(doc=>[doc.sourceId||doc.sourceUri||doc.sourceTitle,doc])).values()];
+      for(const document of uniqueDocuments){try{const table=sourceTableFromDocument(document);if(table)sourceTables.set(table.id,table);}catch(error){unknowns.push(`Таблица ${document.sourceTitle||''} не прочитана: ${error.message}`);}}
       const profile=RESEARCH_PROFILES[job.researchProfile]||RESEARCH_PROFILES.default;
-      const sourceList = uniqueDocuments.slice(0,profile.documentsPerNeed).map((doc, index) => ({ ref: `S${index + 1}`, sourceId:doc.sourceId || `${doc.sourceKind || 'source'}:${index + 1}`, sourceUri: doc.sourceUri, sourceTitle: doc.sourceTitle, sourceKind: doc.sourceKind, text: doc.text.slice(0,profile.documentChars) }));
+      const sourceList = uniqueDocuments.slice(0,profile.documentsPerNeed).map((doc, index) => ({ ref: `S${index + 1}`, sourceId:doc.sourceId || `${doc.sourceKind || 'source'}:${index + 1}`, sourceUri: doc.sourceUri, sourceTitle: doc.sourceTitle, sourceKind: doc.sourceKind, sourceScope:doc.sourceScope||(doc.sourceKind==='example'?'training-fixture':'current-run-discovered'), text: doc.text.slice(0,profile.documentChars) }));
       await observe(job,'ResearchProgressed',{phase:'evidence-extraction',batch:needIndex+1,batches:needs.length,sourcesRead:documentCache.size,evidenceAccepted:evidence.length});
+      for(const source of sourceList)admittedSources.set(source.sourceId,{sourceId:source.sourceId,sourceUri:source.sourceUri,sourceTitle:source.sourceTitle,sourceScope:source.sourceScope});
       emit(job, 'researching', `Извлекаю Evidence из ${sourceList.length} источников`, { sourceCalls, evidence:evidence.length, sources:activeSources.map(source => source.id), capability:'MODEL' });
       let extracted;
       for(let attempt=0;attempt<2;attempt+=1){const extractionId=operationId(job,attempt?'evidence-extraction-repair':'evidence-extraction'),timeoutMs=job.budgets?.evidenceExtractionMs||240000,deadline=operationDeadline(timeoutMs);await observe(job,'InferenceRequested',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction',displayInput:'model.infer("evidence-extraction")',deadline});await observe(job,'InferenceStarted',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction',displayInput:'model.infer("evidence-extraction")',deadline});try{extracted=await modelJson('Ты извлекаешь Evidence из предоставленных источников. Верни JSON evidence: [{claim,quote,sourceRef,confidence,kind}], conflicts, unknowns. Используй только sourceRef из списка. claim должен быть проверяемым и не содержать новых чисел. confidence: direct|corroborated|inferred|conflicted; kind: fact|interpretation|unknown. Цитата должна быть дословным коротким фрагментом или пустой.',JSON.stringify({brief:job.brief,need,sources:sourceList}),{signal:job.controller.signal,temperature:0.1,maxTokens:attempt?600:450,timeoutMs});if(!Array.isArray(extracted?.evidence))throw Object.assign(new Error('Evidence extraction returned malformed structured output'),{code:'MALFORMED_RESPONSE'});await observe(job,'InferenceCompleted',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction'});break}catch(error){const malformed=error.code==='MALFORMED_RESPONSE'||error instanceof SyntaxError,code=malformed?'MALFORMED_RESPONSE':error.code||'PROVIDER_FAILURE';await observe(job,'InferenceFailed',{operationId:extractionId,capability:'MODEL',purpose:'evidence-extraction',code});if(malformed&&attempt===0)continue;throw Object.assign(error,{code})}}
@@ -191,10 +193,12 @@ export function createResearchService({ modelJson, sources = [], render, store, 
         if(job.researchProfile==='showcase'&&evidence.length>=16)break;
         const source = sourceList.find(candidate => candidate.ref === item.sourceRef);
         if (!source || !String(item.claim || '').trim()) continue;
-        if(evidence.some(existing=>existing.sourceId===source.sourceId&&existing.claim===String(item.claim).trim()))continue;
         const id = `E${String(evidence.length + 1).padStart(3, '0')}`;
-        evidence.push({ id, claim: String(item.claim).trim(), quote: String(item.quote || '').trim(), sourceId:source.sourceId, sourceUri: source.sourceUri, sourceTitle: source.sourceTitle, sourceKind: source.sourceKind, retrievedAt: new Date().toISOString(), confidence: ['direct', 'corroborated', 'inferred', 'conflicted'].includes(item.confidence) ? item.confidence : 'inferred', kind: ['fact', 'interpretation', 'unknown'].includes(item.kind) ? item.kind : 'fact' });
-        need.dods.forEach(dod => { dod.evidenceIds.push(id); dod.findings.push(String(item.claim).trim()); });
+        const quote=String(item.quote||'').trim(),verifiedQuote=Boolean(quote&&source.text.includes(quote));
+        const claim=verifiedQuote?quote:String(item.claim).trim();
+        if(evidence.some(existing=>existing.sourceId===source.sourceId&&existing.claim===claim))continue;
+        evidence.push({ id, claim, quote:verifiedQuote?quote:'',epistemicClass:verifiedQuote?'source-attributed-claim':'interpretation',quoteVerified:verifiedQuote, sourceId:source.sourceId, sourceUri: source.sourceUri, sourceTitle: source.sourceTitle, sourceKind: source.sourceKind, retrievedAt: new Date().toISOString(), confidence:verifiedQuote?(['direct', 'corroborated', 'inferred', 'conflicted'].includes(item.confidence)?item.confidence:'inferred'):'inferred', kind:verifiedQuote&&item.kind==='fact'?'fact':item.kind==='unknown'?'unknown':'interpretation' });
+        need.dods.forEach(dod => { dod.evidenceIds.push(id); dod.findings.push(claim); });
       }
       // Some local models answer the extraction request with an empty array
       // when the user's wording has no repository vocabulary. The sources are
@@ -202,20 +206,20 @@ export function createResearchService({ modelJson, sources = [], render, store, 
       // instead of failing an otherwise valid run.
       if (evidence.length === evidenceBeforeExtraction) {
         for (const source of sourceList.slice(0, 2)) {
-          const claim = describeLocalDocument({ sourceTitle: source.sourceTitle, text: source.text });
+          const claim = source.text.slice(0,260).trim();
           if (!claim) continue;
           const id = `E${String(evidence.length + 1).padStart(3, '0')}`;
-          evidence.push({ id, claim, quote: source.text.slice(0, 260), sourceId:source.sourceId, sourceUri: source.sourceUri, sourceTitle: source.sourceTitle, sourceKind: source.sourceKind, retrievedAt: new Date().toISOString(), confidence: 'direct', kind: 'fact' });
+          evidence.push({ id, claim, quote:claim,epistemicClass:'source-attributed-claim',quoteVerified:true, sourceId:source.sourceId, sourceUri: source.sourceUri, sourceTitle: source.sourceTitle, sourceKind: source.sourceKind, retrievedAt: new Date().toISOString(), confidence: 'direct', kind: 'fact' });
           need.dods.forEach(dod => { dod.evidenceIds.push(id); dod.findings.push(claim); });
         }
       }
-      conflicts.push(...(Array.isArray(extracted?.conflicts) ? extracted.conflicts.map(String) : []));
-      unknowns.push(...(Array.isArray(extracted?.unknowns) ? extracted.unknowns.map(String) : []));
+      conflicts.push(...presentLimitation(extracted?.conflicts));
+      unknowns.push(...presentLimitation(extracted?.unknowns));
       need.dods.forEach(dod => { dod.status = dod.evidenceIds.length ? 'met' : 'unknown'; });
       await observe(job,'ResearchProgressed',{phase:'evidence-extraction-completed',batch:needIndex+1,batches:needs.length,sourcesRead:documentCache.size,evidenceAccepted:evidence.length});
       emit(job, 'researching', `Проверяемые сигналы: ${need.title}`, { need:need.title, sourceCalls, evidence:evidence.length, sources:activeSources.map(source => source.id) });
     }
-    return { evidence, conflicts: [...new Set(conflicts)], unknowns: [...new Set(unknowns)], sourceStats: stats, sourceCalls };
+    return { evidence,admittedSources:[...admittedSources.values()],sourceTables:[...sourceTables.values()], conflicts: [...new Set(conflicts)], unknowns: [...new Set(unknowns)], sourceStats: stats, sourceCalls };
   }
 
   function localExcerpt(text) {
@@ -250,7 +254,7 @@ export function createResearchService({ modelJson, sources = [], render, store, 
 
   async function gatherRandom(job, need) {
     const localSources = sources.filter(source => source.id !== 'web');
-    const evidence = []; const sourceStats = {}; let sourceCalls = 0;
+    const evidence = []; const sourceStats = {},sourceTables=new Map(),unknowns=[]; let sourceCalls = 0;
     emit(job, 'researching', 'Сканирую локальный продуктовый контекст', { need:need.title, sources:localSources.map(source => source.id), evidence:0, sourceCalls:0 });
     for (const source of localSources) {
       ensureActive(job);
@@ -260,7 +264,7 @@ export function createResearchService({ modelJson, sources = [], render, store, 
       await observe(job, 'CapabilityStarted', { operationId:searchId, capability:source.id.toUpperCase(), operation:'search', displayInput });
       let documents;
       try {
-        documents = await source.search({ query:`${job.brief.question} PO Agent Suite Data Narrative Slides Evidence`, limit:6, signal:job.controller.signal });
+        documents = await source.search({ allowedRunIds:job.brief.sourceRunIds||[], query:job.brief.question, demo:job.showcase?.id||false, allowSystemInternal:job.brief.sourceScope==='system-internal', limit:6, signal:job.controller.signal });
         await observe(job, 'CapabilityCompleted', { operationId:searchId, capability:source.id.toUpperCase(), operation:'search', found:documents.length });
       } catch (error) {
         await observe(job, 'CapabilityFailed', { operationId:searchId, capability:source.id.toUpperCase(), operation:'search', code:error.code || 'SOURCE_UNAVAILABLE' });
@@ -273,17 +277,18 @@ export function createResearchService({ modelJson, sources = [], render, store, 
         const readId=operationId(job,`${source.id}-read`);
         await observe(job,'SourceOpened',{operationId:readId,capability:source.id.toUpperCase(),...meta,displayInput:`${source.id}.read("research-context")`});
         await observe(job,'SourceRead',{operationId:readId,capability:source.id.toUpperCase(),...meta});
-        const quote = describeLocalDocument(document); if (!quote) continue;
+        try{const table=sourceTableFromDocument(document);if(table)sourceTables.set(table.id,table);}catch(error){unknowns.push(`Таблица ${document.sourceTitle||''} не прочитана: ${error.message}`);}
+        const quote = String(document.text||'').trim().slice(0,260); if (!quote) continue;
         const id = `E${String(evidence.length + 1).padStart(3, '0')}`;
         const claim = quote;
-        evidence.push({ id, claim, quote, sourceId:document.sourceId || `${document.sourceKind || 'source'}:${document.sourceTitle}`, sourceUri:document.sourceUri, sourceTitle:document.sourceTitle, sourceKind:document.sourceKind, retrievedAt:new Date().toISOString(), confidence:'direct', kind:'fact' });
+        evidence.push({ id, claim, quote,quoteVerified:true,epistemicClass:'source-attributed-claim', sourceId:document.sourceId || `${document.sourceKind || 'source'}:${document.sourceTitle}`, sourceUri:document.sourceUri, sourceTitle:document.sourceTitle, sourceKind:document.sourceKind, retrievedAt:new Date().toISOString(), confidence:'direct', kind:'fact' });
         if (evidence.length >= 6) break;
       }
       if (evidence.length >= 6) break;
     }
     need.dods[0].evidenceIds = evidence.map(item => item.id); need.dods[0].findings = evidence.map(item => item.claim); need.dods[0].status = evidence.length ? 'met' : 'unknown';
     emit(job, 'researching', `Собрано ${evidence.length} локальных Evidence`, { sources:localSources.map(source => source.id), evidence:evidence.length, sourceCalls });
-    return { evidence, conflicts:[], unknowns:evidence.length ? [] : ['Локальный индекс не дал проверяемой опоры для случайного ракурса.'], sourceStats, sourceCalls };
+    return { evidence,sourceTables:[...sourceTables.values()], conflicts:[], unknowns:[...unknowns,...(evidence.length ? [] : ['Локальный индекс не дал проверяемой опоры для случайного ракурса.'])], sourceStats, sourceCalls };
   }
 
   async function execute(job, request) {
@@ -310,7 +315,7 @@ export function createResearchService({ modelJson, sources = [], render, store, 
       }
       const validIds = new Set(gathered.evidence.map(item => item.id));
       for (const need of needs) for (const dod of need.dods) dod.evidenceIds = dod.evidenceIds.filter(id => validIds.has(id));
-      const research = { brief: job.brief, needs, evidence: gathered.evidence, conflicts: gathered.conflicts, unknowns: gathered.unknowns, sourceStats: gathered.sourceStats, sourceCalls: gathered.sourceCalls };
+      const research = { brief: job.brief, needs, evidence: gathered.evidence,admittedSources:gathered.admittedSources,sourceTables:gathered.sourceTables||[], conflicts: gathered.conflicts, unknowns: gathered.unknowns, sourceStats: gathered.sourceStats, sourceCalls: gathered.sourceCalls };
       job.research=research;
       if (request.researchOnly) { emit(job,'complete','Research Evidence готов',{evidence:gathered.evidence.length,researchOnly:true}); return research; }
       emit(job, 'synthesizing', 'Собираю Data из Evidence');
@@ -367,18 +372,22 @@ export { DEFAULT_LIMITS };
 export function dataFromEvidence(brief, research) {
   const facts = research.evidence.filter(item => item.kind === 'fact');
   const sourceCount = new Set(research.evidence.map(item => item.sourceUri)).size;
+  const subjectMetrics=subjectMetricsFromTables(research.sourceTables||[]);
   return {
     title: brief.question,
     columns: ['Evidence ID', 'Наблюдение', 'Источник', 'Уверенность'],
     rows: facts.map(item => [item.id, item.claim, item.sourceTitle, item.confidence]),
     insights: (research.needs || []).flatMap(need => need.dods.flatMap(dod => dod.findings.slice(0, 2))),
     sources: [...new Set(research.evidence.map(item => item.sourceUri))],
-    sourceKind: research.evidence.some(item => item.sourceKind === 'example') ? 'example' : research.evidence.some(item => item.sourceKind === 'web') ? 'uploaded-context' : 'local-index',
-    numericMetrics: [
+    sourceKind: [...research.evidence,...(research.sourceTables||[])].some(item => item.sourceKind === 'example') ? 'example' : research.evidence.some(item => item.sourceKind === 'web') ? 'uploaded-context' : 'local-index',
+    sourceTables:research.sourceTables||[],
+    subjectMetrics,
+    numericMetrics:subjectMetrics.map(m=>[m.id,m.value,m.unit,m.name]),
+    diagnosticMetrics: [
       ['evidence_count', facts.length, 'проверяемых фактов', 'из текущего ResearchArtifact'],
       ['source_count', sourceCount, 'локальных или web-источников', 'из текущего ResearchArtifact'],
       ['source_calls', Number(research.sourceCalls || 0), 'обращений к источникам', 'из trace текущего job'],
       ['pipeline_stages', STAGES.length, 'стадий исследовательского контура', 'из исполняемого research pipeline']
-    ]
+    ].map(([name,value,unit,basis])=>({name,value,unit,basis,metricClass:'diagnostic'}))
   };
 }

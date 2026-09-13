@@ -1,1 +1,11 @@
-import assert from 'node:assert/strict';import {chartSpecsFromDataArtifact} from '../core/metric-chart.mjs';const d={id:'d',data:{numericMetrics:[['conversion',12,'%']],rows:[[12]]}};const c=chartSpecsFromDataArtifact(d);assert.equal(c[0].sourceArtifactId,'d');assert.deepEqual(c[0].rowRefs,['d:row:1']);console.log('PO_DECK_CHARTS_AUDIT PASS');
+import assert from 'node:assert/strict';
+import {chartSpecsFromDataArtifact,resolveChartSpec} from '../core/metric-chart.mjs';
+import {sourceTableFromDocument,subjectMetricsFromTables} from '../core/subject-data.mjs';
+assert.deepEqual(chartSpecsFromDataArtifact({id:'d',data:{numericMetrics:[['conversion',12,'%']],rows:[[12]]}}),[]);
+const table=sourceTableFromDocument({sourceId:'fixture',sourceTitle:'rate.csv',text:'conversion\n12%\n'});
+const data={sourceTables:[table],subjectMetrics:subjectMetricsFromTables([table])},artifact={id:'d',data};
+const [chart]=chartSpecsFromDataArtifact(artifact);
+assert.equal(chart.sourceArtifactId,'d');assert.deepEqual(chart.rowRefs,[table.rows[0].id]);
+assert.deepEqual(chart.cellRefs,[table.rows[0].cells[0].id]);
+assert.equal(resolveChartSpec(artifact,chart)[0].value,12);
+console.log('PO_DECK_CHARTS_AUDIT PASS (projection; real slide path tested by subject-integrity)');

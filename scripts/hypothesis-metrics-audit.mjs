@@ -1,1 +1,11 @@
-import assert from 'node:assert/strict';import {deriveHypothesisPlan} from '../core/po-hypothesis.mjs';const h=deriveHypothesisPlan({narrative:{thesis:'x'},dataArtifact:{id:'d',data:{numericMetrics:[['m',4,'units']]}}});assert.equal(h.primaryMetric.sourceArtifactIds[0],'d');assert.equal(h.target,null);console.log('HYPOTHESIS_METRICS_AUDIT PASS');
+import assert from 'node:assert/strict';
+import {deriveHypothesisPlan} from '../core/po-hypothesis.mjs';
+import {sourceTableFromDocument,subjectMetricsFromTables} from '../core/subject-data.mjs';
+const table=sourceTableFromDocument({sourceId:'fixture',sourceTitle:'measurement.csv',sourceUri:'fixture:measurement.csv',text:'duration[days]\n4\n'});
+const dataArtifact={id:'d',data:{sourceTables:[table],subjectMetrics:subjectMetricsFromTables([table])}};
+const input={narrative:{thesis:'x'},dataArtifact},h=deriveHypothesisPlan(input);
+assert.equal(h.primaryMetric.sourceArtifactIds[0],'d');assert.equal(h.target,null);
+assert.equal(h.baseline,4);assert.deepEqual(h.primaryMetric.cellRefs,[table.rows[0].cells[0].id]);
+assert.deepEqual(deriveHypothesisPlan(input),h);
+assert.equal(deriveHypothesisPlan({dataArtifact:{id:'d',data:{numericMetrics:[['m',4,'units']]}}}).primaryMetric,null);
+console.log('HYPOTHESIS_METRICS_AUDIT PASS');

@@ -1,5 +1,5 @@
 import { validatePresentationMaterialization } from './presentation-validation.mjs';
-import { chartSpecsFromDataArtifact } from '../core/metric-chart.mjs';
+import { chartSpecsFromDataArtifact,resolveChartSpec } from '../core/metric-chart.mjs';
 
 export function createSlidesHarness({ slidesHtml, resolvePresentationStyle }) {
   if (typeof slidesHtml !== 'function') throw new Error('Slides Harness requires the existing slides implementation');
@@ -15,7 +15,15 @@ export function createSlidesHarness({ slidesHtml, resolvePresentationStyle }) {
     const roleByIntent={cover:'decision',situation:'decision','key-claim':'facts',evidence:'facts',comparison:'facts',metrics:'data',unknowns:'validation-plan',recommendation:'proposal',roadmap:'validation-plan',closing:'proposal'};
     const slides = plan.scenes.map(scene => ({ id:scene.id,index:scene.index,intent:scene.intent,semanticRole:roleByIntent[scene.intent]||'facts',claimIds:scene.claimIds||[],evidenceIds:scene.evidenceIds||[],dataRefs:{rowIds:scene.rowIds||[],metricIds:scene.metricIds||[],insightIds:scene.insightIds||[]},title:scene.title,thesis:scene.thesis,visualType:scene.visualType }));
     const chartSpecs=chartSpecsFromDataArtifact(dataArtifact);
-    const renderPlan={...plan,scenes:slides.map(scene=>({...plan.scenes.find(item=>item.id===scene.id),semanticRole:scene.semanticRole}))};
+    for(const slide of slides){
+      slide.epistemicClaims=plan.scenes.find(s=>s.id===slide.id)?.epistemicClaims||[];
+      if(slide.epistemicClaims.some(c=>c.class==='proposal'))slide.semanticRole='proposal';
+      else if(slide.epistemicClaims.some(c=>c.class==='interpretation'))slide.semanticRole='interpretation';
+      else if(slide.epistemicClaims.some(c=>c.class==='source-attributed-claim'))slide.semanticRole='source-claims';
+    }
+    const resolvedCharts=chartSpecs.map(spec=>({spec,values:resolveChartSpec(dataArtifact,spec)})).filter(c=>c.values);
+    const demo=Boolean(dataArtifact.data.showcase||dataArtifact.data.sourceKind==='example');
+    const renderPlan={...plan,subjectCharts:resolvedCharts,scenes:slides.map(scene=>({...plan.scenes.find(item=>item.id===scene.id),demo,semanticRole:scene.epistemicClaims.some(c=>c.class==='proposal')?'proposal':scene.epistemicClaims.some(c=>c.class==='interpretation')?'interpretation':scene.epistemicClaims.some(c=>c.class==='source-attributed-claim')?'source-claims':scene.semanticRole}))};
     const decisionDeck=hypothesis?{roles:semanticRoles,narrativeRef:hypothesis.data.narrativeRef||null,hypothesisRef:hypothesis.id,claimRefs:hypothesis.data.claimRefs||[],evidenceRefs:hypothesis.data.evidenceRefs||[],metricRefs:chartSpecs.flatMap(spec=>spec.metricRefs||[]),chartRefs:chartSpecs.map(spec=>spec.id)}:null;
     const operationId=createOperationId('presentation-render');
     await observe('ArtifactRequested',{operationId,operation:'render',displayInput:'presentation.render("slides")'});

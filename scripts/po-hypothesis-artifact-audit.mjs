@@ -1,2 +1,11 @@
-import assert from 'node:assert/strict';import {createHypothesisHarness} from '../harnesses/hypothesis.mjs';
-const h=createHypothesisHarness(),events=[];const out=await h.execute({run:{id:'run-h'},role:'product-owner',artifacts:[{id:'n1',type:'Narrative',data:{thesis:'Test thesis',supportingClaims:['c1'],strengthBasis:{supportingValidated:['e1']}}},{id:'d1',type:'DataArtifact',data:{numericMetrics:[['cycle',42,'days']]}}],observe:async(t,p)=>events.push(t),createOperationId:()=> 'op-h'});const a=out.artifacts[0];assert.equal(a.type,'HypothesisPlan');assert.equal(a.data.proposalStatus,'proposed');assert.equal(a.data.sourceArtifactIds.join(','),'n1,d1');assert.equal(a.data.baseline,42);assert.equal(a.data.primaryMetric.id,'metric:d1:1');assert.ok(events.includes('ArtifactCompleted'));console.log('PO_HYPOTHESIS_ARTIFACT_AUDIT PASS');
+import assert from 'node:assert/strict';
+import {createHypothesisHarness} from '../harnesses/hypothesis.mjs';
+import {sourceTableFromDocument,subjectMetricsFromTables} from '../core/subject-data.mjs';
+const table=sourceTableFromDocument({sourceId:'fixture',sourceTitle:'cycle.csv',text:'cycle[days]\n42\n'});
+const metrics=subjectMetricsFromTables([table]),h=createHypothesisHarness(),events=[];
+const artifacts=[{id:'n1',type:'Narrative',data:{thesis:'Test thesis',supportingClaims:['c1'],strengthBasis:{supportingValidated:['e1']}}},{id:'d1',type:'DataArtifact',data:{sourceTables:[table],subjectMetrics:metrics}}];
+const out=await h.execute({run:{id:'run-h'},role:'product-owner',artifacts,observe:async t=>events.push(t),createOperationId:()=> 'op-h'});
+const a=out.artifacts[0];assert.equal(a.type,'HypothesisPlan');assert.equal(a.data.proposalStatus,'proposed');
+assert.deepEqual(a.sourceArtifactIds,['n1','d1']);assert.equal(a.data.baseline,42);assert.equal(a.data.primaryMetric.id,metrics[0].id);
+assert.ok(events.includes('ArtifactCompleted'));
+console.log('PO_HYPOTHESIS_ARTIFACT_AUDIT PASS (harness emission, not ready-plan acceptance)');

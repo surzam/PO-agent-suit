@@ -48,6 +48,7 @@ test('RED C: counter evidence uses current vocabulary and survives synthesis sel
 });
 test('RED lineage and markdown use the structured argument',async()=>{
   const {report}=await validate([fact('E1')]);
+  report.data.unknowns=['Unknown effect']; // canonical uncertainty, not free model prose
   const synthesis={id:'sy',type:'SynthesisPlan',data:{objective:'Interpretation question',keyClaims:[{id:'C1',claim:'Exact selected claim',kind:'evidence-backed',evidenceIds:['E1']}],uncertainties:['Unknown effect']}};
   const data={id:'da',type:'DataArtifact',data:{rows:[]}};
   let legacyCalled=false;
@@ -55,7 +56,8 @@ test('RED lineage and markdown use the structured argument',async()=>{
   const artifact=result.artifacts[0];
   assert.deepEqual(artifact.sourceArtifactIds,['sy','da','vr']);
   assert.equal(legacyCalled,false);
-  assert.match(artifact.data.content,/Exact selected claim/);
+  assert.match(artifact.data.content,/Источник сообщает: Claim E1/);
+  assert.doesNotMatch(artifact.data.content,/Exact selected claim/); // ungrounded paraphrase is not authority
   assert.match(artifact.data.content,/Unknown effect/);
   assert.equal(artifact.data.content,artifact.data.narrativeMarkdown);
 });
@@ -111,8 +113,9 @@ test('real Synthesis to Narrative preserves omitted conflict and renders only pe
   assert.equal(JSON.stringify([evidence,report]),original);
   assert.ok(a.data.counterClaims.includes('E2'));
   assert.equal(a.data.claimDetails.find(c=>c.id==='E2').refType,'evidence');
-  assert.ok(a.data.assumptions.includes('Assumed mechanism'));
-  assert.match(a.data.narrativeMarkdown,/Claim E2/);
+  assert.ok(a.data.assumptions.some(text=>text.includes('самостоятельный вывод не установлен')));
+  assert.doesNotMatch(a.data.narrativeMarkdown,/Assumed mechanism/);
+  assert.match(a.data.narrativeMarkdown,/E2/); // identity survives; unverified interpretation is not repeated as fact
   assert.match(a.data.narrativeMarkdown,/No experiment/);
   assert.doesNotMatch(a.data.narrativeMarkdown,/MUST NOT BECOME EVIDENCE|Подтверждено/);
   assert.equal(materializeNarrativeMarkdown(JSON.parse(JSON.stringify(a.data))),a.data.narrativeMarkdown);

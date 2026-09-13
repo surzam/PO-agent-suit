@@ -10,6 +10,8 @@ import { createHarnessRegistry } from '../core/registry.mjs';
 import { createSlidesHarness } from '../harnesses/slides.mjs';
 import { createPresentationStoryPlannerHarness } from '../harnesses/presentation-story-planner.mjs';
 import { deriveSlideTitle, storyPlanFromSynthesis } from '../harnesses/legacy-story-plan.mjs';
+import {sourceTableFromDocument,subjectMetricsFromTables} from '../core/subject-data.mjs';
+import {chartSpecsFromDataArtifact} from '../core/metric-chart.mjs';
 
 process.env.PO_AGENT_NO_LISTEN = '1';
 const { slidesHtml, designFamily, templateTheme, templateVisualTheme, resolvePresentationStyle, DEFAULT_PRESENTATION_STYLE_ID, mottoSimilarity } = await import('../server.mjs');
@@ -26,7 +28,9 @@ const plan = {
     visualType
   }))
 };
-const data = { rows:[], numericMetrics:[['time_to_insight',12,'minutes','demo'],['steps_removed',7,'steps','demo']] };
+const sourceTable=sourceTableFromDocument({sourceId:'fixture',sourceTitle:'times.csv',text:'duration[minutes]\n12\n7\n'});
+const data = { rows:[],sourceTables:[sourceTable],subjectMetrics:subjectMetricsFromTables([sourceTable]) };
+plan.subjectCharts=chartSpecsFromDataArtifact({id:'fixture-data',data}).map(spec=>({spec}));
 const themes = new Set(), families = new Set();
 const chartClass = { editorial:'data-lollipop', arcade:'data-pixels', brutal:'data-blocks', playful:'data-bubbles', diagrammatic:'data-line', cinematic:'data-orbit' };
 const appHtml = fs.readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
@@ -49,7 +53,9 @@ for (const slug of slugs) {
   assert.ok(uiTheme.typography.display && uiTheme.typography.body && uiTheme.typography.mono, `${slug}: UI receives complete typography`);
   assert.equal((html.match(/<section class="slide/g) || []).length, plan.scenes.length, `${slug}: scene count`);
   assert.equal((html.match(/<figure class="data-visual/g) || []).length, 2, `${slug}: no more than one data visual per five slides`);
-  assert.ok(html.includes(chartClass[designFamily(slug)]), `${slug}: family-specific data visual`);
+  const chartDom=new JSDOM(html);
+  assert.deepEqual([...chartDom.window.document.querySelectorAll('[data-value]')].map(n=>Number(n.dataset.value)),[12,7],`${slug}: actual cells, not decorative chart values`);
+  chartDom.window.close();
   assert.ok(!html.includes('<aside class="chart'), `${slug}: no generic floating chart`);
   assert.ok(html.includes('width:1920px;height:1080px'), `${slug}: fixed 16:9 stage`);
   assert.ok(html.includes('deck-stage'), `${slug}: stage wrapper`);
@@ -134,4 +140,4 @@ try{
 const inlineScript = appHtml.match(/<script>([\s\S]*)<\/script>/)?.[1];
 assert.ok(inlineScript, 'app inline script exists');
 assert.doesNotThrow(() => new Function(inlineScript), 'app inline script compiles');
-console.log(`slides audit: ${slugs.length} templates · ${themes.size} unique themes · ${families.size} shared UI/deck families · 6 scene renderers · 6 family-specific data visuals · PASS`);
+console.log(`slides audit: ${slugs.length} templates · ${themes.size} unique themes · ${families.size} shared UI/deck families · 6 scene renderers · cell-backed charts · PASS (DOM, not visual geometry)`);

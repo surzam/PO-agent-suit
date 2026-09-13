@@ -1,1 +1,13 @@
-import assert from 'node:assert/strict';import {chartSpecsFromDataArtifact} from '../core/metric-chart.mjs';const d={id:'d1',data:{numericMetrics:[['conversion',.4,'%']],rows:[[1]]}};const c=chartSpecsFromDataArtifact(d);assert.equal(c.length,1);assert.equal(c[0].sourceArtifactId,'d1');assert.deepEqual(chartSpecsFromDataArtifact(null),[]);assert.deepEqual(chartSpecsFromDataArtifact(d,{kind:'pie'}),[]);console.log('DATA_CHARTS_AUDIT PASS');
+import assert from 'node:assert/strict';
+import {chartSpecsFromDataArtifact,resolveChartSpec} from '../core/metric-chart.mjs';
+import {sourceTableFromDocument,subjectMetricsFromTables} from '../core/subject-data.mjs';
+const table=sourceTableFromDocument({sourceId:'fixture',sourceTitle:'measurement.csv',sourceUri:'fixture:measurement.csv',text:'duration[days]\n12\n'});
+const d={id:'d1',data:{sourceTables:[table],subjectMetrics:subjectMetricsFromTables([table])}};
+const c=chartSpecsFromDataArtifact(d);
+assert.equal(c.length,1);assert.equal(c[0].sourceArtifactId,'d1');
+assert.equal(resolveChartSpec(d,c[0])[0].value,12);
+assert.deepEqual(chartSpecsFromDataArtifact(d),c);
+assert.deepEqual(chartSpecsFromDataArtifact(null),[]);
+assert.deepEqual(chartSpecsFromDataArtifact(d,{kind:'pie'}),[]);
+assert.deepEqual(chartSpecsFromDataArtifact({id:'legacy',data:{numericMetrics:[['conversion',.4,'%']]}}),[]);
+console.log('DATA_CHARTS_AUDIT PASS');

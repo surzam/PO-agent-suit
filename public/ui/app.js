@@ -120,7 +120,8 @@ async function renderResult(id=currentRunId){
   if(value.status==='completed'){
     const outputs=value.artifacts.filter(item=>PRIMARY_OUTPUT_TYPES.has(item.type));
     if(outputs.length){const group=document.createElement('div');group.className='output-group primary-results';group.innerHTML='<small>РЕЗУЛЬТАТЫ</small>';outputs.forEach(item=>appendOutputButton(group,item));$('#resultArtifacts').append(group)}
-    $('#resultStatus').textContent=statusText.completed;$('#ctoFork').hidden=false;return;
+    const demo=value.events?.some(event=>event.payload?.sourceKind==='example'||event.payload?.sources?.some?.(source=>source.sourceKind==='example'));
+    $('#resultStatus').textContent=(demo?'Учебный пример. ':'')+statusText.completed;$('#ctoFork').hidden=false;return;
   }
   if(value.status==='needs-context'){
     const event=[...value.events].reverse().find(item=>item.type==='ResearchContextRequired'||item.type==='IntentDiscoveryInsufficientContext');

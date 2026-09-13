@@ -21,7 +21,7 @@ export function createResearchHarness({ researchService, artifactStore }) {
       const researchProfile=context.showcase?.researchProfile||brief.data.showcase?.researchProfile||'default';
       if(context.showcase)for(const document of context.showcaseDocuments||[])researchService.addContext({name:`${context.showcase.id}/${document.file.split('/').slice(2).join('/')}`,text:document.content,sourceKind:'example'});
       const effectiveBrief=config.extensionFocus?{...brief.data,question:`${brief.data.question||run.intent}\n\nДополнительный фокус: ${config.extensionFocus}`,extension:{focus:config.extensionFocus,sourceRef:config.sourceRef||null,evidenceRef:config.evidenceRef||null}}:brief.data;
-      const started = researchService.start({ sessionId, origin:'user', mode:'deep', brief:effectiveBrief,researchProfile,showcase:context.showcase||brief.data.showcase||null,temperature:config.temperature, style:config.style, observe, createOperationId, researchOnly:true,signal });
+      const started = researchService.start({ sessionId, origin:'user', mode:'deep', brief:{...effectiveBrief,sourceRunIds:[run.id,run.parentRunId].filter(Boolean)},researchProfile,showcase:context.showcase||brief.data.showcase||null,temperature:config.temperature, style:config.style, observe, createOperationId, researchOnly:true,signal });
       const finished = await researchService.wait(started.generationId);
       if (finished.state === 'needs-context') {
         const cause=finished.failureCause || 'insufficient-context';
@@ -38,6 +38,8 @@ export function createResearchHarness({ researchService, artifactStore }) {
           briefArtifactId: brief.id,
           intentArtifactId: intent?.id || brief.data.intentArtifactId || null,
           items: evidence,
+          admittedSources:research.admittedSources,
+          sourceTables:research.sourceTables||[],
           summary: `Legacy Research собрал ${evidence.length} Evidence из ${new Set(evidence.map(item => item.sourceUri)).size} источников.`,
           metadata: { legacyGenerationId: started.generationId, conflicts: research.conflicts || [], unknowns: research.unknowns || [], needs: research.needs || [], sourceStats: research.sourceStats || {}, sourceCalls: research.sourceCalls || [],researchProfile,showcase:context.showcase||brief.data.showcase||null }
         } }],

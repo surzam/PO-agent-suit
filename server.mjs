@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {resolveSubjectMetric,resolveChartSpec} from './core/metric-chart.mjs';
 import { createProviderScheduler } from './core/provider-scheduler.mjs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -399,11 +400,7 @@ function templateFontLink(slug) {
   return fontUrl ? `<link rel="stylesheet" href="${fontUrl}">` : '';
 }
 function metricRows(data) {
-  if (Array.isArray(data.numericMetrics) && data.numericMetrics.length) return data.numericMetrics;
-  return (data.rows || []).map(row => {
-    const match = String(row[1] || '').match(/(-?\d+(?:[.,]\d+)?)/);
-    return match ? [String(row[0] || 'metric'), Number(match[1].replace(',', '.')), String(row[2] || 'значение'), 'извлечено из Data'] : null;
-  }).filter(Boolean).slice(0, 10);
+  return (data.subjectMetrics||[]).flatMap(metric=>{const value=resolveSubjectMetric(data,metric);return value===null?[]:[[metric.name,metric.displayUnit==='percent'?value*100:value,metric.displayUnit||metric.unit,'Из клеток исходной таблицы']];});
 }
 
 function dataHtml(data, meta) {
@@ -416,8 +413,12 @@ function narrativeHtml(plan, meta) { return `<!doctype html><meta charset="utf-8
 const styleCss = { editorial:'--bg:#f3eee4;--ink:#18212b;--accent:#1d5c45;--soft:#d9e7cf;--hot:#d77a5b;font-family:Georgia,serif', professional:'--bg:#071321;--ink:#f7fbff;--accent:#4f7cff;--soft:#b8f3e8;--hot:#ff805d;font-family:Inter,system-ui,sans-serif', kinetic:'--bg:#21133d;--ink:#fff9ef;--accent:#f0dc4d;--soft:#62e7d6;--hot:#ff6d8b;font-family:Impact,system-ui,sans-serif', diagrammatic:'--bg:#eef3f7;--ink:#14263a;--accent:#1e65d6;--soft:#b5cbe2;--hot:#f07b4f;font-family:ui-monospace,monospace' };
 for (const template of templates) styleCss[template.slug] = templateTheme(template.slug);
 function sceneVisual(scene, index, total, chartHtml = '') {
+  if(scene.humanStatement){
+    const statement=scene.humanStatement;
+    return `<header class="scene-header"><span>${scene.demo?'Учебный пример · ':''}${index+1} / ${total}</span><em>${esc(statement.statusLabel||'')}</em></header><main class="safe-scene-content"><h1>${esc(scene.title)}</h1><p>${esc(statement.text)}</p>${statement.limitations?.length?`<aside class="statement-limitations">${statement.limitations.map(esc).join(' ')}</aside>`:''}${chartHtml}</main><footer class="scene-footer"><span>${esc((statement.provenanceRefs||[]).map(r=>r.sourceUri||r.sourceId||r.evidenceId).filter(Boolean).join(' · '))}</span><b>${index+1}</b></footer>`;
+  }
   const evidence=[...new Map((scene.evidence || []).map(value=>[String(value).trim().toLowerCase(),String(value).trim()])).values()].filter(Boolean).slice(0,4); const cards=evidence.map((value,i)=>`<article class="evidence-card reveal"><b>0${i+1}</b><p>${esc(value)}</p></article>`).join('');
-  const header=`<header class="scene-header reveal"><span>${String(index+1).padStart(2,'0')} / ${String(total).padStart(2,'0')}</span><em>${esc(scene.semanticRole || scene.visualType)}</em></header>`;
+  const header=`<header class="scene-header reveal"><span>${scene.demo?'Учебный пример · ':''}${String(index+1).padStart(2,'0')} / ${String(total).padStart(2,'0')}</span><em>${esc(scene.semanticRole || scene.visualType)}</em></header>`;
   const footer=`<footer class="scene-footer reveal"><span>${esc(scene.thesis)}</span><b>${index===total-1?'NEXT →':String(index+1).padStart(2,'0')}</b></footer>`;
   if (index === 0) return `${header}<div class="title-composition"><span class="title-index reveal">01</span><h1 class="reveal">${esc(scene.title)}</h1><p class="lead reveal">${esc(scene.thesis)}</p></div>${chartHtml}${footer}`;
   if (index === total-1) return `${header}<div class="closing-composition"><p class="closing-kicker reveal">Следующий ход</p><h1 class="reveal">${esc(scene.title)}</h1><p class="lead reveal">${esc(scene.thesis)}</p><div class="closing-line reveal"></div></div>${footer}`;
@@ -445,10 +446,18 @@ function chartSceneIndexes(scenes, enabled) {
 }
 function slidesHtml(plan, meta, data) {
   const style=styleCss[meta.styleId] || styleCss.professional, family=designFamily(meta.styleId), variant=hashSeed(`${meta.styleId}:${meta.generationId}`)%6, metrics=metricRows(data);
-  const chart=chartVisual(metrics,family,hashSeed(`${meta.generationId}:chart`));
-  const chartIndexes=chartSceneIndexes(plan.scenes,metrics.length>0);
-  const scenes=plan.scenes.map((scene,index)=>`<section class="slide ${index===0?'active visible':''}${chartIndexes.has(index)?' has-chart':''}" data-visual="${esc(scene.visualType)}">${sceneVisual(scene,index,plan.scenes.length,chartIndexes.has(index)?chart:'')}</section>`).join('');
+  const charts=(plan.subjectCharts||[]).map(({spec})=>subjectChartHtml(spec,resolveChartSpec({id:spec.sourceArtifactId,data},spec))).filter(Boolean);
+  const chartIndexes=chartSceneIndexes(plan.scenes,charts.length>0);
+  let nextChart=0;
+  const scenes=plan.scenes.map((scene,index)=>`<section class="slide ${index===0?'active visible':''}${chartIndexes.has(index)?' has-chart':''}" data-visual="${esc(scene.visualType)}">${sceneVisual(scene,index,plan.scenes.length,chartIndexes.has(index)?charts[nextChart++%charts.length]:'')}</section>`).join('');
   return deckDocument(plan,meta,style,family,variant,scenes);
+}
+function subjectChartHtml(spec,values){
+  if(!values?.length||values.some(m=>!Number.isFinite(m.value)))return '';
+  const points=values.map(m=>({...m,displayValue:m.displayUnit==='percent'?m.value*100:m.value}));
+  const min=Math.min(0,...points.map(m=>m.displayValue)),max=Math.max(0,...points.map(m=>m.displayValue)),span=max-min||1;
+  const x=value=>100+(value-min)/span*340;
+  return `<figure class="data-visual" data-chart-id="${esc(spec.id)}" data-metric-refs="${esc(spec.metricRefs.join(' '))}" data-cell-refs="${esc(spec.cellRefs.join(' '))}"><figcaption>Данные источника</figcaption><svg viewBox="0 0 600 ${points.length*80+20}" role="img" aria-label="${esc(spec.title)}">${points.map((m,i)=>`<g data-metric-id="${esc(m.metricId)}" data-value="${m.value}"><text x="10" y="${i*80+20}" fill="currentColor" font-size="12">${esc(m.name)}</text><rect x="${Math.min(x(0),x(m.displayValue))}" y="${i*80+30}" width="${Math.abs(x(m.displayValue)-x(0))}" height="25" fill="currentColor"/><text x="450" y="${i*80+49}" fill="currentColor" font-size="14">${esc(Number(m.displayValue.toFixed(3)))} ${esc(m.displayUnit==='percent'?'%':m.unit||'')}</text></g>`).join('')}</svg></figure>`;
 }
 function deckDocument(plan,meta,style,family,variant,scenes) {
   return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; object-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https://fonts.googleapis.com; font-src data: https://fonts.gstatic.com; img-src data: blob:; connect-src 'none'; frame-src 'none'"><title>${esc(plan.topic)}</title>${templateFontLink(meta.styleId)}<style>
@@ -485,7 +494,8 @@ function deckDocument(plan,meta,style,family,variant,scenes) {
 .variant-1 .title-composition{grid-template-columns:1fr 320px}.variant-1 .title-index{grid-column:2;grid-row:1/3}.variant-2 .scene-title{text-align:right;margin-left:auto}.variant-3 .slide{box-shadow:inset 28px 0 0 var(--hot)}.variant-4 .scene-header{border-style:dashed}.variant-5 .title-composition h1{font-style:italic}
 @media print{html,body{width:1920px;height:auto;overflow:visible;background:#fff}.deck-viewport{position:static;overflow:visible}.deck-stage{position:static;width:auto;height:auto;transform:none!important}.slide{position:relative;display:block!important;visibility:visible!important;opacity:1!important;pointer-events:auto!important;width:1920px;height:1080px;break-after:page}.deck-controls{display:none!important}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.2s!important}}
-</style></head><body class="family-${family} variant-${variant}" data-template="${esc(meta.styleId)}"><div class="deck-viewport"><main class="deck-stage" id="deckStage">${scenes}</main></div><div class="deck-controls"><button id="deckPrev" aria-label="Предыдущий слайд">←</button><span class="deck-position" id="deckPosition">1 / ${plan.scenes.length}</span><button id="deckNext" aria-label="Следующий слайд">→</button></div><script>
+.safe-scene-content{position:absolute;inset:170px 110px 150px;overflow:auto}.safe-scene-content h1{font:600 52px/1.2 system-ui!important;text-shadow:none!important;letter-spacing:normal!important;margin:0 0 36px!important;max-width:none!important}.safe-scene-content p{font:400 32px/1.5 system-ui;white-space:pre-wrap;overflow-wrap:anywhere;max-width:1450px}.safe-scene-content .data-visual{position:relative!important;inset:auto!important;margin-top:24px}.epistemic-notes{position:fixed;left:12px;bottom:12px;z-index:1001;max-width:35vw;max-height:45vh;overflow:auto;padding:10px;background:#071521;color:#fff;font:14px sans-serif}.epistemic-notes summary{cursor:pointer}
+</style></head><body class="family-${family} variant-${variant}" data-template="${esc(meta.styleId)}"><div class="deck-viewport"><main class="deck-stage" id="deckStage">${scenes}</main></div><div class="deck-controls"><button id="deckPrev" aria-label="Предыдущий слайд">←</button><span class="deck-position" id="deckPosition">1 / ${plan.scenes.length}</span><button id="deckNext" aria-label="Следующий слайд">→</button></div>${(plan.limitations||[]).length?`<details class="epistemic-notes"><summary>Ограничения исследования</summary><ul>${plan.limitations.map(l=>`<li data-limitation-id="${esc(l.id)}">${esc(l.text)}</li>`).join('')}</ul></details>`:''}<script>
 const slides=[...document.querySelectorAll('.slide')],stage=document.getElementById('deckStage');let current=0,wheelLock=false,touchX=0;
 function scale(){const factor=Math.min(innerWidth/1920,innerHeight/1080),x=(innerWidth-1920*factor)/2,y=(innerHeight-1080*factor)/2;stage.style.transform='translate('+x+'px,'+y+'px) scale('+factor+')'}
 function go(next){current=Math.max(0,Math.min(next,slides.length-1));slides.forEach((slide,index)=>{slide.classList.toggle('active',index===current);slide.classList.toggle('visible',index===current)});document.getElementById('deckPosition').textContent=(current+1)+' / '+slides.length;document.getElementById('deckPrev').disabled=current===0;document.getElementById('deckNext').disabled=current===slides.length-1}
@@ -573,7 +583,7 @@ async function renderResearchGeneration({ generationId, brief, research, data, s
 const artifactStore = createArtifactStore(exportDir);
 const realRoot = await fs.realpath(root);
 const configuredRoots = (await Promise.all((appConfig.research?.local?.allowed_paths || ['.']).map(async value => fs.realpath(path.resolve(root, value)).catch(() => null)))).filter(value => value && (value === realRoot || value.startsWith(`${realRoot}${path.sep}`)));
-export const researchSources = [createLocalSource({ roots:configuredRoots, maxFiles:Number(appConfig.research?.local?.max_files || 200) })];
+export const researchSources = [createLocalSource({ roots:configuredRoots,rootScope:'system-internal', maxFiles:Number(appConfig.research?.local?.max_files || 200) })];
 const webConfig=appConfig.research?.web || {};
 const searxngEndpoint=process.env.PO_SEARXNG_URL || webConfig.endpoint;
 if (process.env.PO_RESEARCH_WEB !== '0' && webConfig.enabled !== false) researchSources.push(

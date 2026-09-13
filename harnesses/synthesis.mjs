@@ -1,3 +1,5 @@
+import {bindClaimEpistemics} from '../core/claim-epistemics.mjs';
+import {taskStatement,canonicalLimitations,TEXT_POLICY_VERSION} from '../core/epistemic-text.mjs';
 const ALLOWED_KINDS = new Set(['evidence-backed', 'interpretation', 'assumption', 'recommendation', 'unknown']);
 
 function normalizeClaim(claim, index) {
@@ -23,6 +25,11 @@ export function createSynthesisHarness({ modelJson }) {
       if (!brief || !evidenceSet || !validation) throw new Error('Synthesis Harness requires Brief, EvidenceSet and ValidationReport');
       if (!validation.data.valid) throw new Error('Synthesis Harness requires a valid ValidationReport');
       const evidence = Array.isArray(evidenceSet.data.items) ? evidenceSet.data.items : [];
+      if(Array.isArray(evidenceSet.data.admittedSources)){
+        const sourceIds=new Set(evidenceSet.data.admittedSources.map(source=>source.sourceId));
+        const outside=evidence.filter(item=>!sourceIds.has(item.sourceId));
+        if(outside.length)throw Object.assign(new Error(`Evidence outside current Run source set: ${outside.map(item=>item.id).join(', ')}`),{code:'EVIDENCE_SOURCE_OUT_OF_SCOPE'});
+      }
       const allowedIds = new Set(evidence.map(item => String(item.id)));
       const system=`Ты Synthesis Harness AgentSuite. Собери только JSON SynthesisPlan из Brief, EvidenceSet и ValidationReport. Не добавляй факты без Evidence ID. Роль — профессиональный worldview, а не готовый ответ: используй её priorities/questions/decisionCriteria для выбора framing, но не меняй факты. Верни поля objective, audience, keyClaims [{id,claim,evidenceIds,kind}], uncertainties, structure, requestedOutputs. Не больше четырёх keyClaims; пиши кратко. kind: evidence-backed|interpretation|assumption|recommendation|unknown. Каждый значимый факт обязан ссылаться на существующие Evidence ID; мнение без ссылки пометь interpretation, assumption или recommendation. Не создавай новые числа. Русский язык. Worldview: ${JSON.stringify(roleDefinition || { id:role, priorities:[], questions:[], decisionCriteria:[] })}`;
       const input=JSON.stringify({ role, roleDefinition, workflow, brief:brief.data, evidence:evidence.map(item => ({ id:item.id, claim:item.claim, sourceUri:item.sourceUri, confidence:item.confidence, kind:item.kind })), validation:validation.data, requestedOutputs:config.requestedOutputs || [] });
@@ -33,6 +40,7 @@ export function createSynthesisHarness({ modelJson }) {
       const invalidIds = keyClaims.flatMap(item => item.evidenceIds.filter(id => !allowedIds.has(id)));
       if (invalidIds.length) throw new Error(`SynthesisPlan contains unknown Evidence IDs: ${[...new Set(invalidIds)].join(', ')}`);
       if (!keyClaims.length) throw new Error('SynthesisPlan requires at least one claim');
+      const task=taskStatement(brief),limitations=canonicalLimitations(evidenceSet,validation);
       const data = {
         runId: run.id,
         roleId: role,
@@ -41,10 +49,12 @@ export function createSynthesisHarness({ modelJson }) {
         intentArtifactId: intent?.id || brief.data.intentArtifactId || evidenceSet.data.intentArtifactId || null,
         evidenceSetArtifactId: evidenceSet.id,
         validationReportArtifactId: validation.id,
-        objective: String(response?.objective || brief.data.goal || '').trim(),
-        audience: String(response?.audience || role || brief.data.audience || '').trim(),
-        keyClaims,
-        uncertainties: Array.isArray(response?.uncertainties) ? response.uncertainties.map(String) : (evidenceSet.data.metadata?.unknowns || []).map(String),
+        objective:task.text,
+        textContext:{policyVersion:TEXT_POLICY_VERSION,task,limitations},
+        textValidation:{objective:{accepted:response?.objective===task.text,reason:'task-is-derived-from-brief'},uncertainties:{mode:'canonical-union',candidateCount:Array.isArray(response?.uncertainties)?response.uncertainties.length:0}},
+        audience: String(roleDefinition?.label || role || brief.data.role || 'Product Owner').trim(),
+        keyClaims:keyClaims.map(claim=>bindClaimEpistemics(claim,evidence.map(e=>({...e,epistemicStatus:validation.data.items?.find(d=>d.evidenceId===e.id)?.epistemicStatus})))),
+        uncertainties:limitations.map(l=>l.text),
         structure: Array.isArray(response?.structure) ? response.structure : [],
         requestedOutputs: Array.isArray(response?.requestedOutputs) ? response.requestedOutputs.map(String) : (config.requestedOutputs || []),
         showcase:brief.data.showcase||evidenceSet.data.metadata?.showcase||null

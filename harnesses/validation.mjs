@@ -27,7 +27,7 @@ export const validationHarness = Object.freeze({
       return {decisionId:`validation:${String(item.id||'missing')}`,evidenceId:item.id||null,
         valid:structurallyValid,structurallyValid,epistemicStatus,
         epistemicBasis:'source-reported; no independent verification',
-        evidenceKind:item.kind,confidence:item.confidence,claim:String(item.claim||''),sourceUri:item.sourceUri||null,issues};
+        evidenceKind:item.kind,confidence:item.confidence,claim:String(item.claim||''),epistemicClass:item.epistemicClass||(item.kind==='fact'?'source-attributed-claim':'interpretation'),sourceId:item.sourceId||null,sourceUri:item.sourceUri||null,issues};
     });
     const inherited = evidenceSet.data.metadata || {};
     const conflicts = Array.isArray(inherited.conflicts) ? inherited.conflicts : [];

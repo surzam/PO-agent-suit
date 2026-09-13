@@ -92,7 +92,7 @@ async function walk(dir, root, out, limit) {
   }
 }
 
-export function createLocalSource({ roots, maxFiles = 200 } = {}) {
+export function createLocalSource({ roots, maxFiles = 200,rootScope='explicit-local-context' } = {}) {
   let indexed; const added=[];
   async function index() {
     if (indexed) return indexed;
@@ -104,16 +104,21 @@ export function createLocalSource({ roots, maxFiles = 200 } = {}) {
   return {
     id: 'local',
     describeConfiguration() { return { id:'local', kind:'local', roots:(roots || []).map((root,index)=>({ id:index ? `project-${index + 1}` : 'project', label:index ? path.basename(root) : 'PROJECT', kind:'project' })), sources:added.map(item=>({ sourceId:stableSourceId(item.sourceKind==='example'?'example':'local-added',item.relative), sourceKind:item.sourceKind||'local', safeDisplayName:path.basename(item.relative), contextRootId:item.sourceKind==='example'?'showcase':'user-added', state:'available' })) }; },
-    addDocument({ name, text,sourceKind='local' }) { const kind=sourceKind==='example'?'example':'local',relative=`${kind==='example'?'showcase-added':'added'}/${String(name||'context.txt').replace(/[^\p{L}\p{N}._/-]/gu,'_').slice(0,140)}`,value={file:relative,relative,size:String(text||'').length,text:String(text||'').slice(0,180000),sourceKind:kind};const index=added.findIndex(item=>item.relative===relative);if(index>=0)added[index]=value;else added.push(value); },
-    async search({ query, limit = 8 }) {
+    addDocument({ name, text,sourceKind='local',ownerRunId=null }) { const kind=sourceKind==='example'?'example':'local',relative=`${kind==='example'?'showcase-added':'added'}/${String(name||'context.txt').replace(/[^\p{L}\p{N}._/-]/gu,'_').slice(0,140)}`,value={ownerRunId,file:relative,relative,size:String(text||'').length,text:String(text||'').slice(0,180000),sourceKind:kind};const index=added.findIndex(item=>item.relative===relative&&item.ownerRunId===ownerRunId);if(index>=0)added[index]=value;else added.push(value); },
+    async search({ query, limit = 8,allowSystemInternal=false,demo=false,allowedRunIds=[] }) {
       const needles = terms(query);
-      return ([...await index(),...added]).map(item => {
+      return ([...(rootScope==='system-internal'&&!allowSystemInternal?[]:await index()),...added]).filter(item=>{
+        if(item.ownerRunId&&!allowedRunIds.includes(item.ownerRunId))return false;
+        const training=item.sourceKind==='example'||item.relative.startsWith('showcase/')||item.relative.startsWith('showcase-added/');
+        return training?Boolean(demo)&&(typeof demo!=='string'||item.relative.includes(`/${demo}/`)):!demo;
+      }).map(item => {
         const haystack = `${item.relative}\n${item.text}`.toLowerCase();
         const score = needles.reduce((sum, word) => sum + (haystack.includes(word) ? 1 : 0), 0);
         return { ...item, score };
       }).filter(item => item.score > 0).sort((a, b) => b.score - a.score || a.relative.localeCompare(b.relative)).slice(0, limit).map(item => ({
         sourceId: stableSourceId(item.sourceKind==='example'||item.relative.startsWith('showcase/')||item.relative.startsWith('showcase-added/')?'example':item.relative.startsWith('added/')?'local-added':'local',item.relative),
         sourceUri: `local://${item.relative}`,
+        sourceScope:item.sourceKind==='example'||item.relative.startsWith('showcase/')||item.relative.startsWith('showcase-added/')?'training-fixture':item.relative.startsWith('added/')?'user-attached':rootScope,
         sourceTitle: item.relative,
         sourceKind: item.sourceKind==='example'||item.relative.startsWith('showcase/')||item.relative.startsWith('showcase-added/')?'example':'local',
         text: item.text.slice(0, 12000)

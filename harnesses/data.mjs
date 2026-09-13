@@ -25,7 +25,7 @@ export function createDataHarness({ dataFromEvidence }) {
       const selectedEvidence = evidence.filter(item => item.kind === 'fact' && decisions.get(String(item.id))?.valid !== false).sort((a,b)=>Number(selectedIds.has(String(b.id)))-Number(selectedIds.has(String(a.id)))).slice(0,24);
       const source = dataFromEvidence(
         { question: synthesis.data.objective || 'SynthesisPlan' },
-        { evidence: selectedEvidence, needs:evidenceSet.data.metadata?.needs||[], sourceCalls:evidenceSet.data.metadata?.sourceCalls || 0 }
+        { evidence: selectedEvidence,sourceTables:evidenceSet.data.sourceTables||[], needs:evidenceSet.data.metadata?.needs||[], sourceCalls:evidenceSet.data.metadata?.sourceCalls || 0 }
       );
       const claimByEvidence = new Map();
       for(const claim of synthesis.data.keyClaims)for(const id of claim.evidenceIds||[]){const key=String(id),ids=claimByEvidence.get(key)||[];ids.push(claim.id);claimByEvidence.set(key,[...new Set(ids)])}
@@ -34,13 +34,12 @@ export function createDataHarness({ dataFromEvidence }) {
       const uniqueId = (base) => { const count=(duplicateIds.get(base)||0)+1;duplicateIds.set(base,count);return count===1?base:`${base}-${count}`; };
       const rowProvenance = source.rows.map((row,rowIndex) => {
         const evidenceId=String(row[0]), evidenceItem=evidenceById.get(evidenceId), decision=decisions.get(evidenceId), claimIds=claimByEvidence.get(evidenceId)||[];
-        return { rowId:uniqueId(stableId('row',{row,evidenceIds:[evidenceId],claimIds})), rowIndex, kind:'fact', evidenceIds:[evidenceId], validationDecisionIds:decision?.decisionId?[decision.decisionId]:[], claimIds, sourceId:evidenceItem?.sourceId||null, sourceTitle:evidenceItem?.sourceTitle||null, sourceUri:evidenceItem?.sourceUri||null };
+        return { rowId:uniqueId(stableId('row',{row,evidenceIds:[evidenceId],claimIds})), rowIndex, kind:'fact',epistemicClass:evidenceItem?.epistemicClass||'source-attributed-claim', evidenceIds:[evidenceId], validationDecisionIds:decision?.decisionId?[decision.decisionId]:[], claimIds, sourceId:evidenceItem?.sourceId||null, sourceTitle:evidenceItem?.sourceTitle||null, sourceUri:evidenceItem?.sourceUri||null };
       });
-      const selectedEvidenceIds=selectedEvidence.map(item=>String(item.id)), selectedClaimIds=[...new Set(selectedEvidenceIds.flatMap(id=>claimByEvidence.get(id)||[]))];
-      const metricProvenance=(source.numericMetrics||[]).map(metric=>{const metricKey=String(metric[0]);const evidenceDerived=['evidence_count','source_count'].includes(metricKey);return{metricId:stableId('metric',{metricKey}),metricKey,kind:evidenceDerived?'derived-metric':'runtime-metadata',origin:evidenceDerived?'evidence':'runtime',evidenceIds:evidenceDerived?selectedEvidenceIds:[],validationDecisionIds:evidenceDerived?selectedEvidenceIds.map(id=>decisions.get(id)?.decisionId).filter(Boolean):[],claimIds:evidenceDerived?selectedClaimIds:[]}});
+      const metricProvenance=(source.subjectMetrics||[]).map(metric=>({metricId:metric.id,metricKey:metric.id,metricClass:'subject',kind:'derived-metric',origin:'source-table',cellRefs:metric.cellRefs,rowRefs:metric.rowRefs,sourceTableRefs:metric.sourceTableRefs,evidenceIds:evidence.filter(e=>(source.sourceTables||[]).some(t=>metric.sourceTableRefs.includes(t.id)&&t.sourceId===e.sourceId)).map(e=>e.id),claimIds:[]}));
       const insightProvenance=(source.insights||[]).map((insight,insightIndex)=>{const matches=selectedEvidence.filter(item=>item.claim===insight),evidenceIds=matches.map(item=>String(item.id)),claimIds=[...new Set(evidenceIds.flatMap(id=>claimByEvidence.get(id)||[]))];return{insightId:uniqueId(stableId('insight',{insight})),insightIndex,kind:evidenceIds.length?'evidence-summary':'interpretation',evidenceIds,validationDecisionIds:evidenceIds.map(id=>decisions.get(id)?.decisionId).filter(Boolean),claimIds}});
       const provenance={synthesisPlanArtifactId:synthesis.id,evidenceSetArtifactId:evidenceSet.id,validationReportArtifactId:validation.id,rows:rowProvenance,metrics:metricProvenance,insights:insightProvenance};
-      const structuredRows=rowProvenance.map(ref=>({rowId:ref.rowId,values:source.rows[ref.rowIndex]}));
+      const structuredRows=rowProvenance.map(ref=>({rowId:ref.rowId,epistemicClass:ref.epistemicClass,values:source.rows[ref.rowIndex]}));
       return {
         artifacts: [{ type:'DataArtifact', sourceArtifactIds:[synthesis.id,evidenceSet.id,validation.id], data: {
           ...source,
